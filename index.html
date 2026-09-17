@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mockup Maker</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Upload a logo, get engraved Cutco knife mockups in seconds.">
+<meta name="theme-color" content="#2b6a9a">
+<meta name="robots" content="noindex, nofollow">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Mockups">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="hero">
+  <div class="hero-inner">
+    <div class="hero-title">
+      <img class="hero-icon" src="icons/icon-192.png" alt="">
+      <h1>Mockup Maker</h1>
+    </div>
+    <p class="hero-sub">Upload a logo → engraved Cutco mockups in seconds</p>
+  </div>
+</header>
+
+<main>
+
+  <!-- ─── Logo source ───────────────────────────────────────────── -->
+  <section class="card" id="source-card">
+    <div id="url-row" class="url-row hidden">
+      <input id="url-input" type="url" inputmode="url" placeholder="Enter a website, e.g. acme-roofing.com" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <button id="url-btn" class="btn primary">Find logo</button>
+    </div>
+    <p id="url-status" class="muted small hidden"></p>
+
+    <label class="dropzone" id="dropzone" for="file-input">
+      <span class="dz-title">⬆︎ Upload a logo</span>
+      <span class="dz-sub">tap to choose a photo · drag &amp; drop · or paste (⌘V)</span>
+      <input id="file-input" type="file" accept="image/*" multiple hidden>
+    </label>
+  </section>
+
+  <!-- ─── Logo picker ───────────────────────────────────────────── -->
+  <section class="card hidden" id="picker-card">
+    <div class="row between">
+      <h2 id="picker-title">Pick the best logo</h2>
+      <div class="row gap">
+        <button id="picker-collapse" class="icon-btn" title="Collapse">▾</button>
+        <button id="pink-toggle" class="icon-btn pink" title="Preview on pink to see white logos">▦</button>
+      </div>
+    </div>
+    <div id="logo-grid" class="logo-grid"></div>
+    <div class="row end">
+      <button id="combine-btn" class="btn">⧉ Combine two logos</button>
+    </div>
+    <div id="combine-panel" class="subpanel hidden">
+      <div class="row between">
+        <p id="combine-msg">Tap two logos in the order you want them, left → right.</p>
+        <button id="combine-swap" class="icon-btn" title="Swap order">⇄</button>
+      </div>
+      <div class="slider-row">
+        <label>Balance</label>
+        <input id="combine-balance" type="range" min="40" max="200" value="100">
+        <span id="combine-balance-val">100%</span>
+      </div>
+      <canvas id="combine-preview" class="combine-preview"></canvas>
+      <div class="row gap">
+        <button id="combine-use" class="btn primary" disabled>Use combined →</button>
+        <button id="combine-cancel" class="btn link">Cancel</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── Mockups ───────────────────────────────────────────────── -->
+  <section class="card" id="mockups-card">
+    <h2>Your mockups</h2>
+
+    <div class="controls">
+      <div class="seg-group">
+        <span class="seg-label">Show</span>
+        <div class="seg type" title="Tap one, or both for the combined view">
+          <button data-val="branding" class="on">Branding</button>
+          <button data-val="personalized">Personalized</button>
+        </div>
+      </div>
+      <div class="seg-group">
+        <span class="seg-label">Side</span>
+        <div class="seg side" title="Tap one, or both">
+          <button data-val="front" class="on">Front</button>
+          <button data-val="back">Back</button>
+        </div>
+      </div>
+      <div class="seg-group">
+        <span class="seg-label">Handle</span>
+        <div class="seg" data-key="handle">
+          <button data-val="classic" class="on">Classic</button>
+          <button data-val="red">Red</button>
+          <button data-val="pearl">White</button>
+        </div>
+      </div>
+      <button id="cleanup-toggle" class="icon-btn gear" title="Logo cleanup">⚙︎</button>
+    </div>
+
+    <!-- Logo cleanup -->
+    <div id="cleanup-panel" class="subpanel hidden">
+      <p class="label"><b>Logo colors</b> — tap a color to remove it</p>
+      <div id="swatches" class="swatches"></div>
+      <hr>
+      <p class="label"><b>Cleanup</b> — ◀ removes more · keeps more ▶</p>
+      <div class="slider-row">
+        <label>Level</label>
+        <input id="cl-level" type="range" min="0" max="255" value="200">
+        <span id="cl-level-val">200</span>
+      </div>
+      <label class="check"><input id="cl-light" type="checkbox"> Light logo (mark the light parts)</label>
+      <label class="check"><input id="cl-separate" type="checkbox"> Separate touching colors</label>
+      <div id="cl-sep-row" class="slider-row indent hidden">
+        <label>Gap</label>
+        <input id="cl-sep" type="range" min="0" max="100" value="40">
+        <span id="cl-sep-val">40</span>
+      </div>
+      <button id="cl-reset" class="btn link">↺ Reset adjustments</button>
+    </div>
+
+    <!-- Personalization text -->
+    <div id="text-panel" class="subpanel hidden">
+      <p class="label"><b>Personalization</b> — what the recipient's side says</p>
+      <div id="text-lines" class="text-lines"></div>
+      <button id="t-reset" class="btn link">↺ Reset wording</button>
+    </div>
+
+    <!-- Back side message -->
+    <div id="back-panel" class="subpanel hidden">
+      <p class="label"><b>Back side message</b> — centered on the back of the blade (leave blank for none)</p>
+      <div id="back-lines" class="text-lines"></div>
+      <button id="b-reset" class="btn link">↺ Clear back message</button>
+    </div>
+
+    <p id="no-logo-hint" class="hint">Upload a logo above and it will appear engraved on every knife below.</p>
+    <p class="muted small">Tap any mockup to show it full screen — turn the phone sideways for the biggest view.</p>
+
+    <div id="products"></div>
+
+    <div class="row gap wrap footer-actions">
+      <button id="share-all" class="btn">⤴ Share all mockups</button>
+      <button id="reset-all" class="btn link">Reset everything</button>
+    </div>
+  </section>
+
+</main>
+
+<!-- Present mode -->
+<div id="present" class="present hidden">
+  <img id="present-img" alt="Mockup">
+  <button id="present-close" class="present-close">✕</button>
+</div>
+
+<template id="product-tpl">
+  <div class="product">
+    <h3 class="product-name"></h3>
+    <div class="seg surface full hidden"><button data-val="blade">Blade engraving</button><button data-val="handle">Handle engraving</button></div>
+    <div class="canvas-wrap"><canvas class="mock"></canvas></div>
+    <div class="row between actions">
+      <div class="row gap">
+        <button class="btn dl">⬇ Download</button>
+        <button class="btn sh">⤴ Share</button>
+      </div>
+      <button class="btn opt">⚙ Options</button>
+    </div>
+    <div class="subpanel options hidden">
+      <div class="tag-opts">
+        <p class="label"><b>Tagline</b> — the line above the logo (leave blank for none)</p>
+        <div class="slider-row tag-text"><label>Text</label><input type="text" data-k="tagline" maxlength="50" placeholder="e.g. Thanks for Spreading the Word!"></div>
+        <div class="slider-row"><label>Size</label><input type="range" data-k="tagsize" min="30" max="200"><span></span></div>
+        <div class="slider-row"><label>Curve</label><input type="range" data-k="tagcurve" min="0" max="100"><span></span></div>
+        <div class="slider-row"><label>Vertical</label><input type="range" data-k="tagvert" min="-40" max="40"><span></span></div>
+        <hr>
+      </div>
+      <p class="label"><b>Engraving</b></p>
+      <div class="slider-row"><label>Opacity</label><input type="range" data-k="opacity" min="5" max="100"><span></span></div>
+      <div class="slider-row hidden"><label>Handle ink</label><input type="range" data-k="inkOpacity" min="5" max="100"><span></span></div>
+      <div class="mark-row hidden"><p class="label"><b>Mark color</b> — for the handle</p><div class="swatches mark-swatches"></div></div>
+      <div class="logo-opts">
+      <hr>
+      <p class="label"><b>Logo</b></p>
+      <div class="slider-row"><label>Size</label><input type="range" data-k="size" min="20" max="200"><span></span></div>
+      <div class="slider-row"><label>Vertical</label><input type="range" data-k="vert" min="-60" max="60"><span></span></div>
+      <div class="slider-row"><label>Horizontal</label><input type="range" data-k="horiz" min="-60" max="60"><span></span></div>
+      <div class="slider-row"><label>Rotate</label><input type="range" data-k="rot" min="-45" max="45" step="0.25"><span></span></div>
+      </div>
+      <div class="text-opts">
+        <hr>
+        <p class="label"><b>Recipient text</b></p>
+        <div class="slider-row"><label>Size</label><input type="range" data-k="tsize" min="20" max="200"><span></span></div>
+        <div class="slider-row"><label>Vertical</label><input type="range" data-k="tvert" min="-60" max="60"><span></span></div>
+        <div class="slider-row"><label>Horizontal</label><input type="range" data-k="thoriz" min="-60" max="60"><span></span></div>
+        <div class="slider-row"><label>Rotate</label><input type="range" data-k="trot" min="-45" max="45" step="0.25"><span></span></div>
+      </div>
+      <div class="back-opts hidden">
+        <hr>
+        <p class="label"><b>Back side</b></p>
+        <label class="check"><input type="checkbox" data-k="blogo"> Small logo where the stamp is</label>
+        <div class="slider-row"><label>Logo size</label><input type="range" data-k="bsize" min="20" max="300"><span></span></div>
+        <div class="slider-row"><label>Vertical</label><input type="range" data-k="bvert" min="-60" max="60"><span></span></div>
+        <div class="slider-row"><label>Horizontal</label><input type="range" data-k="bhoriz" min="-100" max="60"><span></span></div>
+        <div class="slider-row"><label>Rotate</label><input type="range" data-k="brot" min="-45" max="45" step="0.25"><span></span></div>
+        <p class="label" style="margin-top:10px"><b>Back message</b> — type it in the "Back side message" box above the knives</p>
+        <div class="slider-row"><label>Size</label><input type="range" data-k="btsize" min="20" max="200"><span></span></div>
+        <div class="slider-row"><label>Vertical</label><input type="range" data-k="btvert" min="-60" max="60"><span></span></div>
+        <div class="slider-row"><label>Horizontal</label><input type="range" data-k="bthoriz" min="-60" max="60"><span></span></div>
+        <div class="slider-row"><label>Rotate</label><input type="range" data-k="btrot" min="-45" max="45" step="0.25"><span></span></div>
+        <p class="label" style="margin-top:10px"><b>Back tagline</b></p>
+        <div class="slider-row tag-text"><label>Text</label><input type="text" data-k="btagline" maxlength="50" placeholder="Optional line above the message"></div>
+        <div class="slider-row"><label>Size</label><input type="range" data-k="btagsize" min="30" max="200"><span></span></div>
+        <div class="slider-row"><label>Curve</label><input type="range" data-k="btagcurve" min="0" max="100"><span></span></div>
+        <div class="slider-row"><label>Vertical</label><input type="range" data-k="btagvert" min="-40" max="40"><span></span></div>
+      </div>
+      <button class="btn link reset-one">↺ Reset this product</button>
+    </div>
+  </div>
+</template>
+
+<script src="app.js"></script>
+</body>
+</html>
