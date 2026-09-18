@@ -62,7 +62,8 @@ const DEFAULT_CLEANUP = { level: 200, light: false, separate: false, separation:
 const defaultPer = (p) => ({ opacity: 40, inkOpacity: 85, markColor: '#ffffff', surface: 'handle', size: 100, vert: 0, horiz: 0, rot: 0, tsize: 100, tvert: 0, thoriz: 0, trot: 0, tagline: p.tagline, tagfont: 'georgia-bi', tagsize: 100, tagcurve: p.arc ? 95 : 0, tagvert: 0,
   // back side: small logo where the stamp was, message in the middle, optional tagline
   blogo: true, bsize: 100, bvert: 0, bhoriz: 0, brot: 0, btsize: 100, btvert: 0, bthoriz: 0, btrot: 0,
-  btagline: '', btagfont: 'georgia-bi', btagsize: 100, btagcurve: p.arc ? 95 : 0, btagvert: 0 });
+  btagline: '', btagfont: 'georgia-bi', btagsize: 100, btagcurve: p.arc ? 95 : 0, btagvert: 0,
+  tagpos: p.id === 'trimmer' ? 'right' : 'above', btagpos: 'above' });
 
 // ─── State ──────────────────────────────────────────────────────────────────
 const state = {
@@ -618,15 +619,18 @@ async function renderProduct(prod, canvas, scale) {
     const lc = layer.getContext('2d');
 
     if (view === 'logo') {
-      const logoZone = drawTagline(lc, z, W, H, { text: per.tagline, font: per.tagfont, size: per.tagsize, curve: per.tagcurve, vert: per.tagvert });
-      placeLogo(lc, P, logoZone, per, INK);
+      // Horizontal / Vertical move the logo and its tagline together
+      const gz = { ...z, x: z.x + (per.horiz / 100) * z.w, y: z.y - (per.vert / 100) * z.h };
+      const logoZone = drawTagline(lc, gz, W, H, { text: per.tagline, font: per.tagfont, size: per.tagsize, curve: per.tagcurve, vert: per.tagvert }, per.tagpos);
+      placeLogo(lc, P, logoZone, { ...per, horiz: 0, vert: 0 }, INK);
     } else if (view === 'text') {
       placeText(lc, z, per, INK);
     } else {
       // back: tagline + message in the middle, small logo where the stamp was
       const bp = { size: per.bsize, vert: per.bvert, horiz: per.bhoriz, rot: per.brot, tsize: per.btsize, tvert: per.btvert, thoriz: per.bthoriz, trot: per.btrot };
-      const textZone = drawTagline(lc, z, W, H, { text: per.btagline, font: per.btagfont, size: per.btagsize, curve: per.btagcurve, vert: per.btagvert });
-      placeText(lc, textZone, bp, INK, textLines(state.back));
+      const mz = { ...z, x: z.x + (bp.thoriz / 100) * z.w, y: z.y - (bp.tvert / 100) * z.h };
+      const textZone = drawTagline(lc, mz, W, H, { text: per.btagline, font: per.btagfont, size: per.btagsize, curve: per.btagcurve, vert: per.btagvert }, per.btagpos);
+      placeText(lc, textZone, { ...bp, thoriz: 0, tvert: 0 }, INK, textLines(state.back));
       if (per.blogo && info.stamp) {
         const st = mirrorZone(info.stamp);
         const sz = { x: st.x * W, y: st.y * H, w: st.w * W, h: st.h * H, angle: z.angle };
@@ -679,29 +683,40 @@ function placeText(lc, zone, per, color, lines = textLines()) {
   lc.restore();
 }
 
-// Draws a tagline (curved or straight) above the logo area; returns the zone left for the logo.
-function drawTagline(lc, z, W, H, t, arcDefault) {
+// Draws a tagline next to the logo/message area and returns the zone left for the logo/message.
+// pos: 'above' | 'below' (curve allowed) | 'left' | 'right' (side by side, always straight).
+function drawTagline(lc, z, W, H, t, pos = 'above') {
   const tag = (t.text || '').trim();
   if (!tag) return { ...z };
+  const side = pos === 'left' || pos === 'right';
+  const curved = !side && t.curve > 0;
+  const box = pos === 'above' ? { x: z.x, y: z.y, w: z.w, h: z.h * 0.32 }
+            : pos === 'below' ? { x: z.x, y: z.y + z.h * 0.68, w: z.w, h: z.h * 0.32 }
+            : pos === 'left'  ? { x: z.x, y: z.y, w: z.w * 0.48, h: z.h }
+            :                   { x: z.x + z.w * 0.52, y: z.y, w: z.w * 0.48, h: z.h };
   const g = document.createElement('canvas'); g.width = W; g.height = H;
   const gc = g.getContext('2d');
   gc.font = fontFor(100, t.font);
   const w100 = gc.measureText(tag).width || 1;
-  const curved = t.curve > 0;
-  const px = Math.max(8, Math.min(z.h * (curved ? 0.20 : 0.16), 100 * (z.w * 0.85) / w100) * (t.size / 100));
+  const px = Math.max(8, Math.min(box.h * (side ? 0.34 : curved ? 0.62 : 0.5), 100 * (box.w * 0.9) / w100) * (t.size / 100));
   const yOff = -(t.vert / 100) * z.h;
-  let logoZone;
+  const below = pos === 'below';
   if (curved) {
-    const r = z.w * (0.6 + ((100 - t.curve) / 100) * 4);
-    drawArcText(gc, tag, z.x + z.w / 2, z.y + px * 1.05 + r + yOff, r, px, t.font);
-    logoZone = { ...z, y: z.y + px * 1.5, h: z.h - px * 1.5 };
+    const r = z.w * (0.6 + ((100 - t.curve) / 100) * 4);        // Curve 100 = tight arc, 1 = nearly flat
+    // arc apex sits at the top of the space when above, at the bottom when below
+    const apex = below ? z.y + z.h - px * 0.25 : box.y + px * 1.05;
+    drawArcText(gc, tag, box.x + box.w / 2, apex + r + yOff, r, px, t.font);
   } else {
     gc.font = fontFor(px, t.font); gc.fillStyle = '#fff'; gc.textAlign = 'center'; gc.textBaseline = 'middle';
-    gc.fillText(tag, z.x + z.w / 2, z.y + px * 0.6 + yOff);
-    logoZone = { ...z, y: z.y + px * 1.3, h: z.h - px * 1.3 };
+    const cy = side ? box.y + box.h / 2 : below ? z.y + z.h - px * 0.7 : box.y + px * 0.75;
+    gc.fillText(tag, box.x + box.w / 2, cy + yOff);
   }
   engrave(lc, g, 0, 0, W, H, 0, 0, W, H);
-  return logoZone;
+  const band = px * 1.5;
+  return pos === 'above' ? { ...z, y: z.y + band, h: z.h - band }
+       : pos === 'below' ? { ...z, h: z.h - band }
+       : pos === 'left'  ? { ...z, x: z.x + z.w * 0.52, w: z.w * 0.48 }
+       :                   { ...z, w: z.w * 0.48 };
 }
 
 // Products with a blade AND a handle surface (pocket knife): one view, logo on the chosen
@@ -950,6 +965,13 @@ function buildProducts() {
       tag.onchange = save;
       tag.after(fontSelect(state.per[prod.id][fk], id => { state.per[prod.id][fk] = id; save(); rerender(prod.id); }));
     });
+    [['tagpos', 'tagcurve'], ['btagpos', 'btagcurve']].forEach(([pk, ck]) => {
+      const seg = $(`.seg.${pk}`, opts); if (!seg) return;
+      const curveRow = $(`input[data-k=${ck}]`, opts).parentElement;
+      const sync = () => { $$('button', seg).forEach(b => b.classList.toggle('on', b.dataset.val === state.per[prod.id][pk])); show(curveRow, !/left|right/.test(state.per[prod.id][pk])); };
+      sync();
+      $$('button', seg).forEach(b => b.onclick = () => { state.per[prod.id][pk] = b.dataset.val; sync(); save(); rerender(prod.id); });
+    });
     const blogo = $('input[data-k=blogo]', opts);
     if (blogo) { blogo.checked = state.per[prod.id].blogo; blogo.onchange = () => { state.per[prod.id].blogo = blogo.checked; save(); rerender(prod.id); }; }
     $('.reset-one', el).onclick = () => {
@@ -959,7 +981,31 @@ function buildProducts() {
     $('.canvas-wrap', el).onclick = () => present(prod);
     host.appendChild(el);
   });
+  enhanceSliders(host);
   syncTextOpts();
+}
+
+// − / + buttons on every slider: one step per tap, hold to keep going
+function enhanceSliders(root) {
+  $$('input[type=range]', root).forEach(inp => {
+    if (inp.dataset.enhanced) return;
+    inp.dataset.enhanced = '1';
+    const mk = (sign) => {
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'step-btn'; b.textContent = sign > 0 ? '+' : '−';
+      const step = parseFloat(inp.step) || 1, min = parseFloat(inp.min), max = parseFloat(inp.max);
+      const bump = () => {
+        const v = Math.min(max, Math.max(min, Math.round((parseFloat(inp.value) + sign * step) / step) * step));
+        if (v === parseFloat(inp.value)) return;
+        inp.value = v; inp.dispatchEvent(new Event('input', { bubbles: true })); inp.dispatchEvent(new Event('change', { bubbles: true }));
+      };
+      let timer = 0, repeat = 0;
+      const stop = () => { clearTimeout(timer); clearInterval(repeat); timer = repeat = 0; };
+      b.addEventListener('pointerdown', e => { e.preventDefault(); bump(); timer = setTimeout(() => { repeat = setInterval(bump, 90); }, 450); });
+      ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => b.addEventListener(ev, stop));
+      return b;
+    };
+    inp.before(mk(-1)); inp.after(mk(1));
+  });
 }
 function syncTextOpts() {
   $$('#products .text-opts').forEach(el => show(el, state.showFront && state.personalized));
@@ -1098,6 +1144,7 @@ function init() {
   $('#present').onclick = (e) => { if (e.target.id === 'present') closePresent(); };
   document.addEventListener('keydown', e => { if (e.key === 'Escape') closePresent(); });
 
+  enhanceSliders(document);
   rerenderAll();
 
   if ('serviceWorker' in navigator && !DEBUG && location.protocol.startsWith('http')) {
