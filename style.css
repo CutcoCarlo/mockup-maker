@@ -187,3 +187,17 @@ canvas.mock { display: block; max-width: 100%; max-height: 52vh; width: auto; he
 /* on/off pill button */
 .btn.toggle { min-height: 40px; padding: 8px 12px; font-size: 14px; }
 .btn.toggle.on { background: var(--blue); border-color: var(--blue); color: #fff; }
+
+/* ── knife sections & designs ───────────────────────────── */
+.product-head { display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 6px 0; user-select: none; -webkit-user-select: none; }
+.product-head h3 { margin: 10px 0; }
+.product-head .chev { margin-left: auto; color: var(--muted); font-size: 18px; }
+.design { border: 1px solid var(--line); border-radius: 12px; padding: 10px; margin: 0 0 12px; background: #fff; }
+.design-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
+.design-name { font-weight: 700; font-size: 14px; }
+.design-head .spacer { flex: 1; }
+.design-head .seg button { padding: 6px 10px; font-size: 13px; min-height: 32px; }
+.icon-btn.small { width: 32px; height: 32px; font-size: 15px; }
+.add-row { margin: 4px 0 8px; }
+.text-line.dim { opacity: .45; }
+.text-note { font-weight: 400; }

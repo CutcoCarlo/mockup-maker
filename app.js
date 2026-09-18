@@ -56,27 +56,43 @@ const fontCss = (id, px) => (FONTS.find(f => f.id === id) || FONTS[0]).css.repla
 
 const INK = '#4c4c4c';          // engraving color before opacity/multiply
 const PREVIEW_W = 1200;         // on-screen render width; export uses native size
-const DEFAULT_TEXT = { line1: 'Handcrafted Especially For', line2: 'The Jones Family', line3: '', font1: 'georgia-bi', font2: 'georgia-bi', font3: 'georgia-bi' };
-const DEFAULT_BACK = { line1: '', line2: '', line3: '', font1: 'georgia-bi', font2: 'georgia-bi', font3: 'georgia-bi' };
 const DEFAULT_CLEANUP = { level: 200, light: false, separate: false, separation: 40, removed: [] };
-const defaultPer = (p) => ({ opacity: 40, inkOpacity: 85, markColor: '#ffffff', surface: 'handle', size: 100, vert: 0, horiz: 0, rot: 0, tsize: 100, tvert: 0, thoriz: 0, trot: 0, tagline: p.tagline, tagfont: 'georgia-bi', tagsize: 100, tagcurve: p.arc ? 95 : 0, tagvert: 0,
-  // back side: small logo where the stamp was, message in the middle, optional tagline
-  blogo: true, bsize: 100, bvert: 0, bhoriz: 0, brot: 0, btsize: 100, btvert: 0, bthoriz: 0, btrot: 0,
-  btagline: '', btagfont: 'georgia-bi', btagsize: 100, btagcurve: p.arc ? 95 : 0, btagvert: 0,
-  tagpos: p.id === 'trimmer' ? 'right' : 'above', btagpos: 'above' });
+
+// ─── Designs ────────────────────────────────────────────────────────────────
+// Every knife holds a list of designs. A design is one picture: which side of the knife,
+// whether the logo and/or text are on, up to three lines of text, how the text sits
+// relative to the logo, and its own sliders.
+let designSeq = Date.now();
+const blankLines = () => [1, 2, 3].map(() => ({ text: '', font: 'georgia-bi' }));
+function newDesign(prod, side = 'front', over = {}) {
+  return {
+    id: 'D' + (designSeq++),
+    side,                         // 'front' | 'back'
+    logo: true, text: false,
+    lines: blankLines(),
+    pos: prod.id === 'trimmer' ? 'right' : 'above',   // text relative to the logo: above | below | left | right
+    curve: prod.arc ? 95 : 0,     // line 1 curve when above/below (0 = straight)
+    logoSpot: 'stamp',            // back only: 'stamp' (small, where the CUTCO mark is) | 'center'
+    surface: 'handle',            // pocket knife only
+    opacity: 40, inkOpacity: 85, markColor: '#ffffff',
+    size: 100, vert: 0, horiz: 0, rot: 0,          // logo (moves logo + text together)
+    tsize: 100, tvert: 0, thoriz: 0, trot: 0,      // text
+    ...over,
+  };
+}
+function starterDesigns(prod) {
+  const d = newDesign(prod);
+  if (prod.tagline) { d.text = true; d.lines[0].text = prod.tagline; }
+  return [d];
+}
+const defaultPer = (p) => ({ collapsed: false, designs: starterDesigns(p) });
 
 // ─── State ──────────────────────────────────────────────────────────────────
 const state = {
   logos: [],            // { id, name, dataURL, w, h }
   activeLogoId: null,
   cleanup: { ...DEFAULT_CLEANUP },
-  showFront: true,      // front of the knife
-  showBack: false,      // mirrored back of the knife (not the pocket knife)
-  branding: true,       // show the logo side
-  personalized: false,  // show the recipient-text side (both on = combined view)
   handle: 'classic',
-  text: { ...DEFAULT_TEXT },
-  back: { ...DEFAULT_BACK },
   per: {},
   pinkBg: false,
   pickerCollapsed: false,
@@ -94,23 +110,46 @@ function load() {
     const raw = localStorage.getItem(STORE_KEY);
     if (!raw) return;
     const s = JSON.parse(raw);
-    Object.assign(state, s);
-    if (s.type && s.branding === undefined) { state.branding = true; state.personalized = s.type === 'personalized'; }
-    if (!state.branding && !state.personalized) state.branding = true;
-    if (s.bothSides !== undefined && s.showBack === undefined) { state.showFront = true; state.showBack = !!s.bothSides; }
-    if (!state.showFront && !state.showBack) state.showFront = true;
-    delete state.bothSides;
-    delete state.type;
+    state.handle = s.handle || 'classic';
+    state.pinkBg = !!s.pinkBg; state.pickerCollapsed = !!s.pickerCollapsed;
+    state.activeLogoId = s.activeLogoId || null;
     state.cleanup = { ...DEFAULT_CLEANUP, ...(s.cleanup || {}) };
-    state.text = { ...DEFAULT_TEXT, ...(s.text || {}) };
-    state.back = { ...DEFAULT_BACK, ...(s.back || {}) };
-    if (s.text && s.text.font && !s.text.font1) { const f = s.text.font === 'bold' ? 'georgia-b' : 'georgia-bi'; state.text.font1 = state.text.font2 = state.text.font3 = f; }
-    delete state.text.font;
-    PRODUCTS.forEach(p => state.per[p.id] = { ...defaultPer(p), ...((s.per || {})[p.id] || {}) });
     state.logos = (s.logos || []).filter(l => l && l.dataURL);
     if (!state.logos.find(l => l.id === state.activeLogoId)) state.activeLogoId = state.logos.length ? state.logos[state.logos.length - 1].id : null;
+    PRODUCTS.forEach(p => {
+      const old = (s.per || {})[p.id];
+      if (old && Array.isArray(old.designs) && old.designs.length) {
+        state.per[p.id] = { collapsed: !!old.collapsed, designs: old.designs.map(d => ({ ...newDesign(p), ...d, lines: (d.lines && d.lines.length === 3) ? d.lines : blankLines() })) };
+      } else if (old && old.tagline !== undefined) {
+        state.per[p.id] = { collapsed: false, designs: migrateOld(p, old, s) };   // settings from the previous version
+      }
+    });
   } catch (e) { /* corrupt store — start fresh */ }
 }
+// Turn the previous version's per-knife settings into designs, so nothing already tuned is lost.
+function migrateOld(p, o, s) {
+  const front = newDesign(p, 'front', {
+    logo: s.branding !== false, text: !!(o.tagline || s.personalized),
+    pos: o.tagpos || (p.id === 'trimmer' ? 'right' : 'above'), curve: o.tagcurve ?? (p.arc ? 95 : 0), surface: o.surface || 'handle',
+    opacity: o.opacity ?? 40, inkOpacity: o.inkOpacity ?? 85, markColor: o.markColor || '#ffffff',
+    size: o.size ?? 100, vert: o.vert ?? 0, horiz: o.horiz ?? 0, rot: o.rot ?? 0,
+    tsize: o.tagline ? (o.tagsize ?? 100) : (o.tsize ?? 100), tvert: o.tagline ? (o.tagvert ?? 0) : (o.tvert ?? 0), thoriz: o.thoriz ?? 0, trot: o.trot ?? 0,
+  });
+  if (o.tagline) { front.lines[0] = { text: o.tagline, font: o.tagfont || 'georgia-bi' }; }
+  else if (s.text) { [1, 2, 3].forEach(i => front.lines[i - 1] = { text: s.text['line' + i] || '', font: s.text['font' + i] || 'georgia-bi' }); }
+  const out = [front];
+  if (s.showBack && !p.surfaces) {
+    const back = newDesign(p, 'back', {
+      logo: o.blogo !== false, text: true, logoSpot: 'stamp',
+      opacity: o.opacity ?? 40, size: o.bsize ?? 100, vert: o.bvert ?? 0, horiz: o.bhoriz ?? 0, rot: o.brot ?? 0,
+      tsize: o.btsize ?? 100, tvert: o.btvert ?? 0, thoriz: o.bthoriz ?? 0, trot: o.btrot ?? 0,
+    });
+    if (s.back) [1, 2, 3].forEach(i => back.lines[i - 1] = { text: s.back['line' + i] || '', font: s.back['font' + i] || 'georgia-bi' });
+    out.push(back);
+  }
+  return out;
+}
+const designOf = (pid, did) => state.per[pid].designs.find(d => d.id === did);
 
 // ─── DOM helpers ────────────────────────────────────────────────────────────
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -480,8 +519,8 @@ function textBlockCanvas(lines, maxW, maxH, scaleMul) {
   lines.forEach((l, i) => { g.font = fontFor(px, l.font); g.fillText(l.text, cw / 2, (i + 0.5) * lineH * px / 100 + px * 0.2); });
   return c;
 }
-function textLines(src = state.text) {
-  return [1, 2, 3].map(i => ({ text: (src['line' + i] || '').trim(), font: src['font' + i] || 'georgia-bi' })).filter(l => l.text);
+function textLines(lines) {
+  return (lines || []).map(l => ({ text: (l.text || '').trim(), font: l.font || 'georgia-bi' })).filter(l => l.text);
 }
 
 // Arched text (white) along the top of a circle of radius r, centred at (cx, cy) — as a canvas overlay.
@@ -497,9 +536,6 @@ function drawArcText(g, text, cx, cy, r, px, fontId) {
     ang += widths[i] / r;
   });
 }
-
-const bothViews = () => state.branding && state.personalized;
-function labelBand(H, twoViews = bothViews()) { return twoViews ? Math.round(H * 0.12) : 0; }
 
 // The back of the knife: the photo mirrored, with the CUTCO stamp painted out (real knives
 // are only stamped on one side). The stamp is covered with the clean steel just left of it,
@@ -583,83 +619,6 @@ function eraseStamp(fc, W, H, st) {
   fc.putImageData(img, x0, y0);
 }
 
-async function renderProduct(prod, canvas, scale) {
-  const info = imageInfo(prod);
-  const img = await loadImage(info.src);
-  const W = Math.round(img.naturalWidth * scale), H = Math.round(img.naturalHeight * scale);
-  const per = state.per[prod.id];
-  if (prod.surfaces) return renderSurfaces(prod, canvas, img, W, H, per, info);
-  const views = [state.showFront && state.branding && 'logo', state.showFront && state.personalized && 'text', state.showBack && 'back'].filter(Boolean);
-  const sides = state.showFront && state.showBack;
-  const band = labelBand(H, views.length > 1);
-  const viewH = H + band;
-  canvas.width = W; canvas.height = viewH * views.length;
-  const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-  const P = await getProcessed();
-
-  views.forEach((view, vi) => {
-    const isBack = view === 'back';
-    const base = isBack ? backImage(img, info) : img;
-    const zoneF = isBack ? mirrorZone(info.zone) : info.zone;
-    ctx.save();
-    ctx.translate(0, vi * viewH);
-    if (band) {
-      ctx.fillStyle = '#1a6fa3';
-      ctx.font = `bold ${Math.round(band * 0.44)}px -apple-system, Helvetica, Arial, sans-serif`;
-      ctx.textBaseline = 'middle';
-      const what = bothViews() ? (view === 'logo' ? 'Branded to Your Business' : view === 'text' ? 'Personalized to the Recipient' : '') : '';
-      const side = sides ? (isBack ? 'Back' : 'Front') : '';
-      ctx.fillText([side, what].filter(Boolean).join(' — '), W * 0.03, band * 0.55);
-    }
-    ctx.translate(0, band);
-    ctx.drawImage(base, 0, 0, W, H);
-    const z = { x: zoneF.x * W, y: zoneF.y * H, w: zoneF.w * W, h: zoneF.h * H, angle: zoneF.angle || 0 };
-    const layer = document.createElement('canvas'); layer.width = W; layer.height = H;
-    const lc = layer.getContext('2d');
-
-    if (view === 'logo') {
-      // Horizontal / Vertical move the logo and its tagline together
-      const gz = { ...z, x: z.x + (per.horiz / 100) * z.w, y: z.y - (per.vert / 100) * z.h };
-      const logoZone = drawTagline(lc, gz, W, H, { text: per.tagline, font: per.tagfont, size: per.tagsize, curve: per.tagcurve, vert: per.tagvert }, per.tagpos);
-      placeLogo(lc, P, logoZone, { ...per, horiz: 0, vert: 0 }, INK);
-    } else if (view === 'text') {
-      placeText(lc, z, per, INK);
-    } else {
-      // back: tagline + message in the middle, small logo where the stamp was
-      const bp = { size: per.bsize, vert: per.bvert, horiz: per.bhoriz, rot: per.brot, tsize: per.btsize, tvert: per.btvert, thoriz: per.bthoriz, trot: per.btrot };
-      const mz = { ...z, x: z.x + (bp.thoriz / 100) * z.w, y: z.y - (bp.tvert / 100) * z.h };
-      const textZone = drawTagline(lc, mz, W, H, { text: per.btagline, font: per.btagfont, size: per.btagsize, curve: per.btagcurve, vert: per.btagvert }, per.btagpos);
-      placeText(lc, textZone, { ...bp, thoriz: 0, tvert: 0 }, INK, textLines(state.back));
-      if (per.blogo && info.stamp) {
-        const st = mirrorZone(info.stamp);
-        const sz = { x: st.x * W, y: st.y * H, w: st.w * W, h: st.h * H, angle: z.angle };
-        placeLogo(lc, P, sz, bp, INK, z);
-      }
-    }
-
-    // clip marks to the steel, then lay them on as an engraving
-    lc.globalCompositeOperation = 'destination-in';
-    lc.drawImage(bladeMask(base, info.src + (isBack ? '#back' : '')), 0, 0, W, H);
-    ctx.save();
-    ctx.globalCompositeOperation = 'multiply';
-    ctx.globalAlpha = per.opacity / 100;
-    ctx.drawImage(layer, 0, 0);
-    ctx.restore();
-
-    if (DEBUG) {
-      if (info.stamp && !isBack) { const st = info.stamp; ctx.strokeStyle = 'rgba(0,0,255,.7)'; ctx.lineWidth = 2; ctx.strokeRect(st.x * W, st.y * H, st.w * W, st.h * H); }
-      ctx.strokeStyle = 'rgba(255,0,0,.8)'; ctx.lineWidth = 2; ctx.strokeRect(z.x, z.y, z.w, z.h);
-      ctx.strokeStyle = 'rgba(0,120,255,.35)'; ctx.lineWidth = 1; ctx.font = '12px sans-serif'; ctx.fillStyle = 'rgba(0,80,200,.8)';
-      for (let f = 0.1; f < 1; f += 0.1) {
-        ctx.beginPath(); ctx.moveTo(f * W, 0); ctx.lineTo(f * W, H); ctx.stroke(); ctx.fillText(f.toFixed(1), f * W + 2, 12);
-        ctx.beginPath(); ctx.moveTo(0, f * H); ctx.lineTo(W, f * H); ctx.stroke(); ctx.fillText(f.toFixed(1), 2, f * H - 2);
-      }
-    }
-    ctx.restore();
-  });
-}
-
 // place the processed logo inside a zone (contain-fit, then size/offset sliders)
 // (zone.angle is the surface's natural tilt in degrees; the Rotate sliders add to it)
 function placeLogo(lc, P, zone, per, color, moveRef = zone) {
@@ -673,7 +632,7 @@ function placeLogo(lc, P, zone, per, color, moveRef = zone) {
   engrave(lc, P.canvas, b.x, b.y, b.w, b.h, -dw / 2, -dh / 2, dw, dh, color);
   lc.restore();
 }
-function placeText(lc, zone, per, color, lines = textLines()) {
+function placeText(lc, zone, per, color, lines) {
   if (!lines.length) return;
   const t = textBlockCanvas(lines, zone.w * 0.9, zone.h * 0.8, per.tsize / 100);
   const cx = zone.x + zone.w / 2 + (per.thoriz / 100) * zone.w;
@@ -683,95 +642,131 @@ function placeText(lc, zone, per, color, lines = textLines()) {
   lc.restore();
 }
 
-// Draws a tagline next to the logo/message area and returns the zone left for the logo/message.
-// pos: 'above' | 'below' (curve allowed) | 'left' | 'right' (side by side, always straight).
-function drawTagline(lc, z, W, H, t, pos = 'above') {
-  const tag = (t.text || '').trim();
-  if (!tag) return { ...z };
-  const side = pos === 'left' || pos === 'right';
-  const curved = !side && t.curve > 0;
-  const box = pos === 'above' ? { x: z.x, y: z.y, w: z.w, h: z.h * 0.32 }
-            : pos === 'below' ? { x: z.x, y: z.y + z.h * 0.68, w: z.w, h: z.h * 0.32 }
-            : pos === 'left'  ? { x: z.x, y: z.y, w: z.w * 0.48, h: z.h }
-            :                   { x: z.x + z.w * 0.52, y: z.y, w: z.w * 0.48, h: z.h };
-  const g = document.createElement('canvas'); g.width = W; g.height = H;
-  const gc = g.getContext('2d');
-  gc.font = fontFor(100, t.font);
-  const w100 = gc.measureText(tag).width || 1;
-  const px = Math.max(8, Math.min(box.h * (side ? 0.34 : curved ? 0.62 : 0.5), 100 * (box.w * 0.9) / w100) * (t.size / 100));
-  const yOff = -(t.vert / 100) * z.h;
-  const below = pos === 'below';
-  if (curved) {
-    const r = z.w * (0.6 + ((100 - t.curve) / 100) * 4);        // Curve 100 = tight arc, 1 = nearly flat
-    // arc apex sits at the top of the space when above, at the bottom when below
-    const apex = below ? z.y + z.h - px * 0.25 : box.y + px * 1.05;
-    drawArcText(gc, tag, box.x + box.w / 2, apex + r + yOff, r, px, t.font);
-  } else {
-    gc.font = fontFor(px, t.font); gc.fillStyle = '#fff'; gc.textAlign = 'center'; gc.textBaseline = 'middle';
-    const cy = side ? box.y + box.h / 2 : below ? z.y + z.h - px * 0.7 : box.y + px * 0.75;
-    gc.fillText(tag, box.x + box.w / 2, cy + yOff);
+
+// Lay out the text around the logo and return the zone left for the logo.
+//   above / below : line 1 on that side of the logo (curved if Curve > 0), line 2 on the other side
+//   left / right  : up to three lines stacked beside the logo
+function drawTextLayout(lc, z, W, H, lines, d) {
+  if (!lines.length) return { ...z };
+  const pos = d.pos;
+  if (pos === 'left' || pos === 'right') {
+    const box = pos === 'left' ? { x: z.x, y: z.y, w: z.w * 0.48, h: z.h } : { x: z.x + z.w * 0.52, y: z.y, w: z.w * 0.48, h: z.h };
+    placeText(lc, { ...box, angle: z.angle }, { tsize: d.tsize, tvert: d.tvert, thoriz: 0, trot: d.trot }, INK, lines);
+    return pos === 'left' ? { ...z, x: z.x + z.w * 0.52, w: z.w * 0.48 } : { ...z, w: z.w * 0.48 };
   }
-  engrave(lc, g, 0, 0, W, H, 0, 0, W, H);
-  const band = px * 1.5;
-  return pos === 'above' ? { ...z, y: z.y + band, h: z.h - band }
-       : pos === 'below' ? { ...z, h: z.h - band }
-       : pos === 'left'  ? { ...z, x: z.x + z.w * 0.52, w: z.w * 0.48 }
-       :                   { ...z, w: z.w * 0.48 };
+  const band = (line, where, curved) => {
+    const g = document.createElement('canvas'); g.width = W; g.height = H;
+    const gc = g.getContext('2d');
+    gc.font = fontFor(100, line.font);
+    const w100 = gc.measureText(line.text).width || 1;
+    const px = Math.max(8, Math.min(z.h * (curved ? 0.20 : 0.16), 100 * (z.w * 0.9) / w100) * (d.tsize / 100));
+    const yOff = -(d.tvert / 100) * z.h;
+    if (curved) {
+      const r = z.w * (0.6 + ((100 - d.curve) / 100) * 4);      // Curve 100 = tight arc, 1 = nearly flat
+      const apex = where === 'above' ? z.y + px * 1.05 : z.y + z.h - px * 0.25;
+      drawArcText(gc, line.text, z.x + z.w / 2, apex + r + yOff, r, px, line.font);
+    } else {
+      gc.font = fontFor(px, line.font); gc.fillStyle = '#fff'; gc.textAlign = 'center'; gc.textBaseline = 'middle';
+      gc.fillText(line.text, z.x + z.w / 2, (where === 'above' ? z.y + px * 0.75 : z.y + z.h - px * 0.7) + yOff);
+    }
+    engrave(lc, g, 0, 0, W, H, 0, 0, W, H);
+    return px * 1.5;
+  };
+  let top = z.y, bottom = z.y + z.h;
+  const other = pos === 'above' ? 'below' : 'above';
+  const b1 = band(lines[0], pos, d.curve > 0);
+  if (pos === 'above') top += b1; else bottom -= b1;
+  if (lines[1]) { const b2 = band(lines[1], other, false); if (other === 'above') top += b2; else bottom -= b2; }
+  return { ...z, y: top, h: Math.max(1, bottom - top) };
 }
 
-// Products with a blade AND a handle surface (pocket knife): one view, logo on the chosen
-// surface; in Personalized mode the recipient text goes on the other one.
-function renderSurfaces(prod, canvas, img, W, H, per, info) {
+// Render one design of one knife into a canvas.
+async function renderDesign(prod, d, canvas, scale) {
+  const info = imageInfo(prod);
+  const img = await loadImage(info.src);
+  const W = Math.round(img.naturalWidth * scale), H = Math.round(img.naturalHeight * scale);
+  if (prod.surfaces) return renderSurfacesDesign(prod, d, canvas, img, W, H, info);
+  const isBack = d.side === 'back';
+  const base = isBack ? backImage(img, info) : img;
+  const zoneF = isBack ? mirrorZone(info.zone) : info.zone;
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(base, 0, 0, W, H);
+  const z = { x: zoneF.x * W, y: zoneF.y * H, w: zoneF.w * W, h: zoneF.h * H, angle: zoneF.angle || 0 };
+  const layer = document.createElement('canvas'); layer.width = W; layer.height = H;
+  const lc = layer.getContext('2d');
+  const P = d.logo ? await getProcessed() : null;
+  const lines = d.text ? textLines(d.lines) : [];
+
+  if (P && P.bbox && isBack && d.logoSpot === 'stamp' && info.stamp) {
+    // small logo where the stamp was; text centred on the blade
+    const st = mirrorZone(info.stamp);
+    placeLogo(lc, P, { x: st.x * W, y: st.y * H, w: st.w * W, h: st.h * H, angle: z.angle }, d, INK, z);
+    if (lines.length) placeText(lc, z, d, INK, lines);
+  } else if (P && P.bbox) {
+    // logo with text arranged around it; Horizontal / Vertical move them together
+    const gz = { ...z, x: z.x + (d.horiz / 100) * z.w, y: z.y - (d.vert / 100) * z.h };
+    const logoZone = drawTextLayout(lc, gz, W, H, lines, d);
+    placeLogo(lc, P, logoZone, { ...d, horiz: 0, vert: 0 }, INK);
+  } else if (lines.length) {
+    placeText(lc, z, d, INK, lines);          // text only, centred
+  }
+
+  lc.globalCompositeOperation = 'destination-in';
+  lc.drawImage(bladeMask(base, info.src + (isBack ? '#back' : '')), 0, 0, W, H);
+  ctx.save(); ctx.globalCompositeOperation = 'multiply'; ctx.globalAlpha = d.opacity / 100; ctx.drawImage(layer, 0, 0); ctx.restore();
+
+  if (DEBUG) {
+    if (info.stamp && !isBack) { const st = info.stamp; ctx.strokeStyle = 'rgba(0,0,255,.7)'; ctx.lineWidth = 2; ctx.strokeRect(st.x * W, st.y * H, st.w * W, st.h * H); }
+    ctx.strokeStyle = 'rgba(255,0,0,.8)'; ctx.lineWidth = 2; ctx.strokeRect(z.x, z.y, z.w, z.h);
+  }
+}
+
+// Pocket knife: etched steel on the blade, coloured ink on the handle. The tab picks where the
+// logo goes; text (if on) takes the other surface, or the chosen surface when the logo is off.
+function renderSurfacesDesign(prod, d, canvas, img, W, H, info) {
   canvas.width = W; canvas.height = H;
   const ctx = canvas.getContext('2d');
   ctx.drawImage(img, 0, 0, W, H);
-  return getProcessed().then(P => {
-    const zone = (name) => { const z = info.zones[name]; return { x: z.x * W, y: z.y * H, w: z.w * W, h: z.h * H, angle: z.angle || 0 }; };
-    // the tab picks where the main engraving goes; with both views on, the text takes the other surface
-    const chosen = per.surface === 'blade' ? 'blade' : 'handle';
-    const other = chosen === 'blade' ? 'handle' : 'blade';
-    const logoSurf = chosen, textSurf = state.branding ? other : chosen;
+  return (d.logo ? getProcessed() : Promise.resolve(null)).then(P => {
+    const zone = (name) => { const zz = info.zones[name]; return { x: zz.x * W, y: zz.y * H, w: zz.w * W, h: zz.h * H, angle: zz.angle || 0 }; };
+    const chosen = d.surface === 'blade' ? 'blade' : 'handle', other = chosen === 'blade' ? 'handle' : 'blade';
+    const logoSurf = chosen, textSurf = d.logo ? other : chosen;
     const steel = document.createElement('canvas'), ink = document.createElement('canvas');
     steel.width = ink.width = W; steel.height = ink.height = H;
     const sc = steel.getContext('2d'), ic = ink.getContext('2d');
-    const draw = (surf, fn) => surf === 'blade' ? fn(sc, INK) : fn(ic, per.markColor);
-    if (state.branding) draw(logoSurf, (c, col) => placeLogo(c, P, zone(logoSurf), per, col));
-    if (state.personalized) draw(textSurf, (c, col) => placeText(c, zone(textSurf), per, col));
+    const draw = (surf, fn) => surf === 'blade' ? fn(sc, INK) : fn(ic, d.markColor);
+    const lines = d.text ? textLines(d.lines) : [];
+    if (P && P.bbox) draw(logoSurf, (c, col) => placeLogo(c, P, zone(logoSurf), d, col));
+    if (lines.length) draw(textSurf, (c, col) => placeText(c, zone(textSurf), d, col, lines));
     const mask = bladeMask(img, info.src);
-    for (const [layer, lc, op, alpha] of [[steel, sc, 'multiply', per.opacity / 100], [ink, ic, 'source-over', per.inkOpacity / 100]]) {
+    for (const [layer, lc, op, alpha] of [[steel, sc, 'multiply', d.opacity / 100], [ink, ic, 'source-over', d.inkOpacity / 100]]) {
       lc.globalCompositeOperation = 'destination-in'; lc.drawImage(mask, 0, 0, W, H);
       ctx.save(); ctx.globalCompositeOperation = op; ctx.globalAlpha = alpha; ctx.drawImage(layer, 0, 0); ctx.restore();
-    }
-    if (DEBUG) {
-      ctx.lineWidth = 2;
-      for (const n of prod.surfaces) { const z = zone(n); ctx.strokeStyle = n === 'blade' ? 'rgba(255,0,0,.8)' : 'rgba(0,160,0,.8)'; ctx.strokeRect(z.x, z.y, z.w, z.h); }
-      ctx.strokeStyle = 'rgba(0,120,255,.35)'; ctx.lineWidth = 1; ctx.font = '12px sans-serif'; ctx.fillStyle = 'rgba(0,80,200,.8)';
-      for (let f = 0.1; f < 1; f += 0.1) {
-        ctx.beginPath(); ctx.moveTo(f * W, 0); ctx.lineTo(f * W, H); ctx.stroke(); ctx.fillText(f.toFixed(1), f * W + 2, 12);
-        ctx.beginPath(); ctx.moveTo(0, f * H); ctx.lineTo(W, f * H); ctx.stroke(); ctx.fillText(f.toFixed(1), 2, f * H - 2);
-      }
     }
   });
 }
 
-// on-screen rerender, coalesced per product
+// on-screen rerender, coalesced per product; one pass at a time
 const pending = new Set();
 let raf = 0;
 function rerender(pid) {
   pending.add(pid);
   if (raf) return;
   raf = requestAnimationFrame(async () => {
-    // one loop at a time; anything requested mid-loop is picked up on the next pass
     while (pending.size) {
       const ids = Array.from(pending); pending.clear();
       for (const id of ids) {
         const prod = PRODUCTS.find(p => p.id === id);
-        const card = $(`#products .product[data-id="${id}"]`);
-        if (!card) continue;
-        try {
-          const img = await loadImage(imageInfo(prod).src);
-          await renderProduct(prod, $('canvas.mock', card), PREVIEW_W / img.naturalWidth);
-        } catch (e) { console.error('render failed', id, e); }
+        if (state.per[id].collapsed) continue;
+        for (const d of state.per[id].designs) {
+          const canvas = $(`#products .design[data-did="${d.id}"] canvas.mock`);
+          if (!canvas) continue;
+          try {
+            const img = await loadImage(imageInfo(prod).src);
+            await renderDesign(prod, d, canvas, PREVIEW_W / img.naturalWidth);
+          } catch (e) { console.error('render failed', id, d.id, e); }
+        }
       }
     }
     raf = 0;
@@ -779,34 +774,36 @@ function rerender(pid) {
 }
 function rerenderAll() { PRODUCTS.forEach(p => rerender(p.id)); }
 
-async function exportCanvas(prod) {
+async function exportCanvas(prod, d) {
   const c = document.createElement('canvas');
-  await renderProduct(prod, c, 1);
+  await renderDesign(prod, d, c, 1);
   return c;
 }
 function canvasBlob(c) { return new Promise(res => c.toBlob(res, 'image/png')); }
-function fileName(prod) {
+function fileName(prod, d) {
   const logo = state.logos.find(l => l.id === state.activeLogoId);
   const base = (logo ? logo.name.replace(/\.[a-z0-9]+$/i, '') : 'mockup').replace(/[^a-z0-9-_]+/gi, '-').slice(0, 30);
-  return prod.surfaces ? `${base}-${prod.id}-${state.per[prod.id].surface}.png` : `${base}-${prod.id}-${state.handle}.png`;
+  const n = state.per[prod.id].designs.indexOf(d) + 1;
+  return `${base}-${prod.id}-${prod.surfaces ? d.surface : d.side}-${n}.png`;
 }
-async function download(prod) {
-  const c = await exportCanvas(prod);
+async function download(prod, d) {
+  const c = await exportCanvas(prod, d);
   const blob = await canvasBlob(c);
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob); a.download = fileName(prod);
+  a.href = URL.createObjectURL(blob); a.download = fileName(prod, d);
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 4000);
 }
-async function share(prods) {
+async function share(items) {
   const files = [];
-  for (const p of prods) files.push(new File([await canvasBlob(await exportCanvas(p))], fileName(p), { type: 'image/png' }));
+  for (const [p, d] of items) files.push(new File([await canvasBlob(await exportCanvas(p, d))], fileName(p, d), { type: 'image/png' }));
   if (navigator.canShare && navigator.canShare({ files })) {
     try { await navigator.share({ files, title: 'Engraving mockup' }); } catch (e) { /* user cancelled */ }
   } else {
-    for (const p of prods) await download(p);
+    for (const [p, d] of items) await download(p, d);
   }
 }
+const allDesigns = () => PRODUCTS.flatMap(p => state.per[p.id].designs.map(d => [p, d]));
 
 // ─── Picker UI ──────────────────────────────────────────────────────────────
 let combine = null; // { picks: [], balance: 100 }
@@ -918,71 +915,166 @@ function cleanupChanged() {
   cleanupTimer = setTimeout(async () => { await renderCleanup(); rerenderAll(); }, 60);
 }
 
+
 // ─── Product cards ──────────────────────────────────────────────────────────
+const POSITIONS = [['above', 'Above'], ['below', 'Below'], ['left', 'Left'], ['right', 'Right']];
+const segHtml = (cls, items) => `<div class="seg ${cls}">${items.map(([v, l]) => `<button data-val="${v}">${l}</button>`).join('')}</div>`;
+const sliderHtml = (label, k, min, max, step) => `<div class="slider-row" data-row="${k}"><label>${label}</label><input type="range" data-k="${k}" min="${min}" max="${max}"${step ? ` step="${step}"` : ''}><span></span></div>`;
+
+function designHtml(prod, d, n) {
+  const pocket = !!prod.surfaces;
+  return `
+  <div class="design" data-did="${d.id}">
+    <div class="design-head">
+      <span class="design-name">Design ${n}</span>
+      ${pocket ? '' : segHtml('side', [['front', 'Front'], ['back', 'Back']])}
+      ${segHtml('parts', [['logo', 'Logo'], ['text', 'Text']])}
+      <span class="spacer"></span>
+      <button class="icon-btn small dup" title="Duplicate this design">⧉</button>
+      <button class="icon-btn small rm" title="Remove this design">✕</button>
+    </div>
+    ${pocket ? '<div class="seg surface full"><button data-val="blade">Blade engraving</button><button data-val="handle">Handle engraving</button></div>' : ''}
+    <div class="canvas-wrap"><canvas class="mock"></canvas></div>
+    <div class="row between actions">
+      <div class="row gap"><button class="btn dl">⬇ Download</button><button class="btn sh">⤴ Share</button></div>
+      <button class="btn opt">⚙ Options</button>
+    </div>
+    <div class="subpanel options hidden">
+      <div class="text-opts">
+        <p class="label"><b>Text</b> <span class="text-note"></span></p>
+        <div class="text-lines"></div>
+        ${pocket ? '' : `<div class="seg-group pos-row"><span class="seg-label">Position</span>${segHtml('pos', POSITIONS)}</div>`}
+        ${sliderHtml('Size', 'tsize', 20, 200)}
+        ${pocket ? '' : sliderHtml('Curve', 'curve', 0, 100)}
+        ${sliderHtml('Vertical', 'tvert', -60, 60)}
+        ${sliderHtml('Horizontal', 'thoriz', -60, 60)}
+        ${sliderHtml('Rotate', 'trot', -45, 45, 0.25)}
+        <button class="btn link copy-text">⧉ Copy this text to all knives</button>
+        <hr>
+      </div>
+      <div class="logo-opts">
+        <p class="label"><b>Logo</b></p>
+        ${pocket ? '' : `<div class="seg-group pos-row spot-row"><span class="seg-label">Placement</span>${segHtml('spot', [['stamp', 'Stamp spot (small)'], ['center', 'Centered']])}</div>`}
+        ${sliderHtml('Size', 'size', 20, 300)}
+        ${sliderHtml('Vertical', 'vert', -60, 60)}
+        ${sliderHtml('Horizontal', 'horiz', -100, 60)}
+        ${sliderHtml('Rotate', 'rot', -45, 45, 0.25)}
+        <hr>
+      </div>
+      <p class="label"><b>Engraving</b></p>
+      ${sliderHtml('Opacity', 'opacity', 5, 100)}
+      ${pocket ? sliderHtml('Handle ink', 'inkOpacity', 5, 100) + '<div class="mark-row"><p class="label"><b>Mark color</b> — for the handle</p><div class="swatches mark-swatches"></div></div>' : ''}
+    </div>
+  </div>`;
+}
+
 function buildProducts() {
   const host = $('#products'); host.innerHTML = '';
-  const tpl = $('#product-tpl');
   PRODUCTS.forEach(prod => {
-    const el = tpl.content.firstElementChild.cloneNode(true);
-    el.dataset.id = prod.id;
-    $('.product-name', el).textContent = prod.name;
-    $('.dl', el).onclick = () => download(prod);
-    $('.sh', el).onclick = () => share([prod]);
-    const opts = $('.options', el);
-    $('.opt', el).onclick = () => { show(opts, opts.classList.contains('hidden')); $('.opt', el).classList.toggle('on'); };
-    $$('input[type=range]', opts).forEach(inp => {
-      const k = inp.dataset.k;
-      const out = inp.nextElementSibling;
-      const fmt = v => /size$/i.test(k) || k === 'opacity' || k === 'inkOpacity' ? v + '%' : /rot$/.test(k) ? (+v).toFixed(2) + '°' : v;
-      inp.value = state.per[prod.id][k]; out.textContent = fmt(inp.value);
-      inp.oninput = () => { state.per[prod.id][k] = +inp.value; out.textContent = fmt(inp.value); rerender(prod.id); };
-      inp.onchange = save;
-    });
-    // blade / handle tabs and mark colour, only for products with two surfaces
-    const surfSeg = $('.seg.surface', el), markRow = $('.mark-row', opts), inkRow = $('input[data-k=inkOpacity]', opts).parentElement;
-    if (prod.surfaces) {
-      show(surfSeg); show(markRow); show(inkRow);
-      const syncSurf = () => $$('button', surfSeg).forEach(b => b.classList.toggle('on', b.dataset.val === state.per[prod.id].surface));
-      syncSurf();
-      $$('button', surfSeg).forEach(b => b.onclick = () => { state.per[prod.id].surface = b.dataset.val; syncSurf(); save(); rerender(prod.id); });
-      const sw = $('.mark-swatches', opts); sw.innerHTML = '';
-      MARK_COLORS.forEach(col => {
-        const d = document.createElement('div'); d.className = 'swatch mark'; d.style.background = col;
-        const syncMark = () => d.classList.toggle('sel', state.per[prod.id].markColor === col);
-        syncMark();
-        d.onclick = () => { state.per[prod.id].markColor = col; $$('.swatch.mark', sw).forEach(x => x.classList.remove('sel')); d.classList.add('sel'); save(); rerender(prod.id); };
-        sw.appendChild(d);
-      });
-      $('.tag-opts', opts).remove(); $('.back-opts', opts).remove();
-    } else {
-      surfSeg.remove(); markRow.remove(); inkRow.remove();
-    }
-    [['tagline', 'tagfont'], ['btagline', 'btagfont']].forEach(([tk, fk]) => {
-      const tag = $(`input[data-k=${tk}]`, opts);
-      if (!tag) return;
-      tag.value = state.per[prod.id][tk] || '';
-      tag.oninput = () => { state.per[prod.id][tk] = tag.value; rerender(prod.id); };
-      tag.onchange = save;
-      tag.after(fontSelect(state.per[prod.id][fk], id => { state.per[prod.id][fk] = id; save(); rerender(prod.id); }));
-    });
-    [['tagpos', 'tagcurve'], ['btagpos', 'btagcurve']].forEach(([pk, ck]) => {
-      const seg = $(`.seg.${pk}`, opts); if (!seg) return;
-      const curveRow = $(`input[data-k=${ck}]`, opts).parentElement;
-      const sync = () => { $$('button', seg).forEach(b => b.classList.toggle('on', b.dataset.val === state.per[prod.id][pk])); show(curveRow, !/left|right/.test(state.per[prod.id][pk])); };
-      sync();
-      $$('button', seg).forEach(b => b.onclick = () => { state.per[prod.id][pk] = b.dataset.val; sync(); save(); rerender(prod.id); });
-    });
-    const blogo = $('input[data-k=blogo]', opts);
-    if (blogo) { blogo.checked = state.per[prod.id].blogo; blogo.onchange = () => { state.per[prod.id].blogo = blogo.checked; save(); rerender(prod.id); }; }
-    $('.reset-one', el).onclick = () => {
-      state.per[prod.id] = defaultPer(prod); save();
-      buildProducts(); rerenderAll();
+    const per = state.per[prod.id];
+    const el = document.createElement('div'); el.className = 'product'; el.dataset.id = prod.id;
+    el.innerHTML = `
+      <div class="product-head"><h3 class="product-name">${prod.name}</h3><span class="muted small count"></span><span class="chev">${per.collapsed ? '▸' : '▾'}</span></div>
+      <div class="designs ${per.collapsed ? 'hidden' : ''}"></div>
+      <div class="row add-row ${per.collapsed ? 'hidden' : ''}"><button class="btn add-design">＋ Add design</button></div>`;
+    $('.product-head', el).onclick = () => { per.collapsed = !per.collapsed; save(); buildProducts(); rerender(prod.id); };
+    $('.add-design', el).onclick = () => {
+      const last = per.designs[per.designs.length - 1];
+      per.designs.push({ ...JSON.parse(JSON.stringify(last)), id: 'D' + (designSeq++) });
+      save(); buildProducts(); rerender(prod.id);
     };
-    $('.canvas-wrap', el).onclick = () => present(prod);
+    $('.count', el).textContent = per.designs.length + (per.designs.length === 1 ? ' design' : ' designs');
+    const list = $('.designs', el);
+    if (!per.collapsed) per.designs.forEach((d, i) => list.insertAdjacentHTML('beforeend', designHtml(prod, d, i + 1)));
     host.appendChild(el);
+    if (!per.collapsed) per.designs.forEach(d => wireDesign(prod, d, $(`.design[data-did="${d.id}"]`, el)));
   });
   enhanceSliders(host);
-  syncTextOpts();
+}
+
+function wireDesign(prod, d, card) {
+  const per = state.per[prod.id];
+  const opts = $('.options', card);
+  const re = () => rerender(prod.id);
+  const wireSeg = (cls, get, set) => {
+    const seg = $(`.seg.${cls}`, card); if (!seg) return;
+    const sync = () => $$('button', seg).forEach(b => b.classList.toggle('on', get() === b.dataset.val));
+    sync();
+    $$('button', seg).forEach(b => b.onclick = (e) => { e.stopPropagation(); set(b.dataset.val); sync(); save(); syncVisibility(); re(); });
+  };
+  const syncVisibility = () => {
+    show($('.text-opts', opts), d.text);
+    show($('.logo-opts', opts), d.logo);
+    const spot = $('.spot-row', opts); if (spot) show(spot, d.side === 'back' && d.logo);
+    const posRow = $('.pos-row:not(.spot-row)', opts); if (posRow) show(posRow, d.logo && !(d.side === 'back' && d.logoSpot === 'stamp'));
+    const curve = $('[data-row=curve]', opts); if (curve) show(curve, d.logo && !(d.side === 'back' && d.logoSpot === 'stamp') && /above|below/.test(d.pos));
+    const note = $('.text-note', opts);
+    const oneEach = d.logo && !(d.side === 'back' && d.logoSpot === 'stamp') && /above|below/.test(d.pos) && !prod.surfaces;
+    note.textContent = oneEach ? '— line 1 goes ' + d.pos + ' the logo, line 2 on the other side (Cutco allows one line each)' : '';
+    $$('.text-line', opts).forEach((row, i) => row.classList.toggle('dim', oneEach && i === 2));
+    $('.design-name', card).textContent = 'Design ' + (per.designs.indexOf(d) + 1) + (prod.surfaces ? '' : d.side === 'back' ? ' · Back' : ' · Front');
+  };
+  // side / parts / surface / position / placement
+  wireSeg('side', () => d.side, v => d.side = v);
+  wireSeg('surface', () => d.surface, v => d.surface = v);
+  wireSeg('pos', () => d.pos, v => d.pos = v);
+  wireSeg('spot', () => d.logoSpot, v => d.logoSpot = v);
+  {
+    const seg = $('.seg.parts', card);
+    const sync = () => $$('button', seg).forEach(b => b.classList.toggle('on', !!d[b.dataset.val]));
+    sync();
+    $$('button', seg).forEach(b => b.onclick = (e) => {
+      e.stopPropagation(); const k = b.dataset.val, o = k === 'logo' ? 'text' : 'logo';
+      if (d[k] && !d[o]) return;                 // keep at least one on
+      d[k] = !d[k]; sync(); save(); syncVisibility(); re();
+    });
+  }
+  // text lines
+  const linesHost = $('.text-lines', opts);
+  d.lines.forEach((line, i) => {
+    const row = document.createElement('div'); row.className = 'text-line';
+    const inp = document.createElement('input'); inp.type = 'text'; inp.maxLength = 50;
+    inp.placeholder = i === 0 ? 'Line 1' : i === 1 ? 'Line 2 (optional)' : 'Line 3 (optional)'; inp.value = line.text || '';
+    inp.oninput = () => { line.text = inp.value; re(); }; inp.onchange = save;
+    row.appendChild(inp);
+    row.appendChild(fontSelect(line.font, id => { line.font = id; save(); re(); }));
+    linesHost.appendChild(row);
+  });
+  $('.copy-text', opts).onclick = () => {
+    PRODUCTS.forEach(p => state.per[p.id].designs.forEach(x => { if (x !== d) x.lines = JSON.parse(JSON.stringify(d.lines)); }));
+    save(); buildProducts(); rerenderAll();
+  };
+  // sliders
+  $$('input[type=range]', opts).forEach(inp => {
+    const k = inp.dataset.k, out = inp.nextElementSibling;
+    const fmt = v => /size$/i.test(k) || k === 'opacity' || k === 'inkOpacity' ? v + '%' : /rot$/.test(k) ? (+v).toFixed(2) + '°' : v;
+    inp.value = d[k]; out.textContent = fmt(inp.value);
+    inp.oninput = () => { d[k] = +inp.value; out.textContent = fmt(inp.value); re(); };
+    inp.onchange = save;
+  });
+  // mark colour (pocket)
+  const sw = $('.mark-swatches', opts);
+  if (sw) MARK_COLORS.forEach(col => {
+    const s = document.createElement('div'); s.className = 'swatch mark' + (d.markColor === col ? ' sel' : ''); s.style.background = col;
+    s.onclick = () => { d.markColor = col; $$('.swatch.mark', sw).forEach(x => x.classList.remove('sel')); s.classList.add('sel'); save(); re(); };
+    sw.appendChild(s);
+  });
+  // buttons
+  $('.dl', card).onclick = () => download(prod, d);
+  $('.sh', card).onclick = () => share([[prod, d]]);
+  $('.opt', card).onclick = () => { show(opts, opts.classList.contains('hidden')); $('.opt', card).classList.toggle('on'); };
+  $('.dup', card).onclick = () => {
+    const i = per.designs.indexOf(d);
+    per.designs.splice(i + 1, 0, { ...JSON.parse(JSON.stringify(d)), id: 'D' + (designSeq++) });
+    save(); buildProducts(); rerender(prod.id);
+  };
+  $('.rm', card).onclick = () => {
+    if (per.designs.length === 1) { if (!confirm('This is the only design for this knife. Reset it to the starting design?')) return; per.designs = starterDesigns(prod); }
+    else per.designs = per.designs.filter(x => x !== d);
+    save(); buildProducts(); rerender(prod.id);
+  };
+  $('.canvas-wrap', card).onclick = () => present(prod, d);
+  syncVisibility();
 }
 
 // − / + buttons on every slider: one step per tap, hold to keep going
@@ -1007,14 +1099,6 @@ function enhanceSliders(root) {
     inp.before(mk(-1)); inp.after(mk(1));
   });
 }
-function syncTextOpts() {
-  $$('#products .text-opts').forEach(el => show(el, state.showFront && state.personalized));
-  $$('#products .tag-opts, #products .logo-opts').forEach(el => show(el, state.showFront && state.branding));
-  $$('#products .back-opts').forEach(el => show(el, state.showBack));
-  show($('#text-panel'), state.showFront && state.personalized);
-  show($('#back-panel'), state.showBack);
-}
-
 function fontSelect(current, onChange) {
   const sel = document.createElement('select'); sel.className = 'font-select';
   FONTS.forEach(f => { const o = document.createElement('option'); o.value = f.id; o.textContent = f.label; o.style.font = f.css.replace('{px}', 15); if (f.id === current) o.selected = true; sel.appendChild(o); });
@@ -1022,9 +1106,10 @@ function fontSelect(current, onChange) {
   return sel;
 }
 
+
 // ─── Present mode ───────────────────────────────────────────────────────────
-async function present(prod) {
-  const c = await exportCanvas(prod);
+async function present(prod, d) {
+  const c = await exportCanvas(prod, d);
   $('#present-img').src = c.toDataURL('image/jpeg', 0.92);
   show($('#present'));
   document.body.style.overflow = 'hidden';
@@ -1032,38 +1117,12 @@ async function present(prod) {
 function closePresent() { show($('#present'), false); document.body.style.overflow = ''; }
 
 // ─── Wiring ─────────────────────────────────────────────────────────────────
-function wireTypeToggles() {
-  const seg = $('.seg.type');
-  const sync = () => { $('button[data-val=branding]', seg).classList.toggle('on', state.branding); $('button[data-val=personalized]', seg).classList.toggle('on', state.personalized); };
-  sync();
-  $$('button', seg).forEach(b => b.onclick = () => {
-    const k = b.dataset.val;
-    if (state[k] && !state[k === 'branding' ? 'personalized' : 'branding']) return; // keep at least one on
-    state[k] = !state[k]; sync(); save(); syncTextOpts(); rerenderAll();
-  });
-}
-function wireSidesToggle() {
-  const seg = $('.seg.side');
-  const sync = () => { $('button[data-val=front]', seg).classList.toggle('on', state.showFront); $('button[data-val=back]', seg).classList.toggle('on', state.showBack); };
-  sync();
-  $$('button', seg).forEach(b => b.onclick = () => {
-    const k = b.dataset.val === 'front' ? 'showFront' : 'showBack', other = k === 'showFront' ? 'showBack' : 'showFront';
-    if (state[k] && !state[other]) return; // keep at least one side on
-    state[k] = !state[k]; sync(); save(); syncTextOpts(); rerenderAll();
-  });
-}
 function wireSegments() {
-  wireTypeToggles();
-  wireSidesToggle();
   $$('.seg[data-key]').forEach(seg => {
     const key = seg.dataset.key;
-    const target = state;
-    const sync = () => $$('button', seg).forEach(b => b.classList.toggle('on', b.dataset.val === target[key]));
+    const sync = () => $$('button', seg).forEach(b => b.classList.toggle('on', b.dataset.val === state[key]));
     sync();
-    $$('button', seg).forEach(b => b.onclick = () => {
-      target[key] = b.dataset.val; sync(); save();
-      rerenderAll();
-    });
+    $$('button', seg).forEach(b => b.onclick = () => { state[key] = b.dataset.val; sync(); save(); rerenderAll(); });
   });
 }
 
@@ -1112,28 +1171,12 @@ function init() {
   $('#cl-sep').oninput = e => { state.cleanup.separation = +e.target.value; $('#cl-sep-val').textContent = e.target.value; cleanupChanged(); };
   $('#cl-reset').onclick = () => { state.cleanup = { ...DEFAULT_CLEANUP, removed: [] }; cleanupChanged(); };
 
-  // personalization text: each line has its own font
-  const buildLines = (hostSel, src) => {
-    const host = $(hostSel); host.innerHTML = '';
-    [1, 2, 3].forEach(i => {
-      const row = document.createElement('div'); row.className = 'text-line';
-      const inp = document.createElement('input'); inp.type = 'text'; inp.maxLength = 50;
-      inp.placeholder = i === 3 ? 'Line 3 (optional)' : 'Line ' + i; inp.value = src['line' + i] || '';
-      inp.oninput = () => { src['line' + i] = inp.value; rerenderAll(); };
-      inp.onchange = save;
-      row.appendChild(inp);
-      row.appendChild(fontSelect(src['font' + i], id => { src['font' + i] = id; save(); rerenderAll(); }));
-      host.appendChild(row);
-    });
-  };
-  buildLines('#text-lines', state.text);
-  buildLines('#back-lines', state.back);
-  $('#t-reset').onclick = () => { state.text = { ...DEFAULT_TEXT }; save(); buildLines('#text-lines', state.text); rerenderAll(); };
-  $('#b-reset').onclick = () => { state.back = { ...DEFAULT_BACK }; save(); buildLines('#back-lines', state.back); rerenderAll(); };
-
-
   // footer
-  $('#share-all').onclick = () => share(PRODUCTS);
+  $('#share-all').onclick = () => share(allDesigns());
+  $('#reset-designs').onclick = () => {
+    if (!confirm('Put every knife back to its single starting design? Your logo stays.')) return;
+    PRODUCTS.forEach(p => state.per[p.id] = defaultPer(p)); save(); buildProducts(); rerenderAll();
+  };
   $('#reset-all').onclick = () => {
     if (!confirm('Clear the logo and every setting?')) return;
     localStorage.removeItem(STORE_KEY); location.reload();
@@ -1152,6 +1195,6 @@ function init() {
   }
 }
 
-if (DEBUG) window.__mm = { state, PRODUCTS, addLogoFromDataURL, rerenderAll, save, exportCanvas, backImage, loadImage };
+if (DEBUG) window.__mm = { state, PRODUCTS, addLogoFromDataURL, rerenderAll, save, exportCanvas, backImage, loadImage, newDesign };
 document.addEventListener('DOMContentLoaded', init);
 })();

@@ -82,20 +82,6 @@
 
     <div class="controls">
       <div class="seg-group">
-        <span class="seg-label">Show</span>
-        <div class="seg type" title="Tap one, or both for the combined view">
-          <button data-val="branding" class="on">Branding</button>
-          <button data-val="personalized">Personalized</button>
-        </div>
-      </div>
-      <div class="seg-group">
-        <span class="seg-label">Side</span>
-        <div class="seg side" title="Tap one, or both">
-          <button data-val="front" class="on">Front</button>
-          <button data-val="back">Back</button>
-        </div>
-      </div>
-      <div class="seg-group">
         <span class="seg-label">Handle</span>
         <div class="seg" data-key="handle">
           <button data-val="classic" class="on">Classic</button>
@@ -127,27 +113,14 @@
       <button id="cl-reset" class="btn link">↺ Reset adjustments</button>
     </div>
 
-    <!-- Personalization text -->
-    <div id="text-panel" class="subpanel hidden">
-      <p class="label"><b>Personalization</b> — what the recipient's side says</p>
-      <div id="text-lines" class="text-lines"></div>
-      <button id="t-reset" class="btn link">↺ Reset wording</button>
-    </div>
-
-    <!-- Back side message -->
-    <div id="back-panel" class="subpanel hidden">
-      <p class="label"><b>Back side message</b> — centered on the back of the blade (leave blank for none)</p>
-      <div id="back-lines" class="text-lines"></div>
-      <button id="b-reset" class="btn link">↺ Clear back message</button>
-    </div>
-
     <p id="no-logo-hint" class="hint">Upload a logo above and it will appear engraved on every knife below.</p>
-    <p class="muted small">Tap any mockup to show it full screen — turn the phone sideways for the biggest view.</p>
+    <p class="muted small">Tap a knife's name to collapse it. Tap any mockup to show it full screen — turn the phone sideways for the biggest view.</p>
 
     <div id="products"></div>
 
     <div class="row gap wrap footer-actions">
       <button id="share-all" class="btn">⤴ Share all mockups</button>
+      <button id="reset-designs" class="btn link">Reset designs</button>
       <button id="reset-all" class="btn link">Reset everything</button>
     </div>
   </section>
@@ -160,72 +133,6 @@
   <button id="present-close" class="present-close">✕</button>
 </div>
 
-<template id="product-tpl">
-  <div class="product">
-    <h3 class="product-name"></h3>
-    <div class="seg surface full hidden"><button data-val="blade">Blade engraving</button><button data-val="handle">Handle engraving</button></div>
-    <div class="canvas-wrap"><canvas class="mock"></canvas></div>
-    <div class="row between actions">
-      <div class="row gap">
-        <button class="btn dl">⬇ Download</button>
-        <button class="btn sh">⤴ Share</button>
-      </div>
-      <button class="btn opt">⚙ Options</button>
-    </div>
-    <div class="subpanel options hidden">
-      <div class="tag-opts">
-        <p class="label"><b>Tagline</b> — the line above the logo (leave blank for none)</p>
-        <div class="slider-row tag-text"><label>Text</label><input type="text" data-k="tagline" maxlength="50" placeholder="e.g. Thanks for Spreading the Word!"></div>
-        <div class="seg-group pos-row"><span class="seg-label">Position</span><div class="seg tagpos"><button data-val="above">Above</button><button data-val="below">Below</button><button data-val="left">Left</button><button data-val="right">Right</button></div></div>
-        <div class="slider-row"><label>Size</label><input type="range" data-k="tagsize" min="30" max="200"><span></span></div>
-        <div class="slider-row"><label>Curve</label><input type="range" data-k="tagcurve" min="0" max="100"><span></span></div>
-        <div class="slider-row"><label>Vertical</label><input type="range" data-k="tagvert" min="-40" max="40"><span></span></div>
-        <hr>
-      </div>
-      <p class="label"><b>Engraving</b></p>
-      <div class="slider-row"><label>Opacity</label><input type="range" data-k="opacity" min="5" max="100"><span></span></div>
-      <div class="slider-row hidden"><label>Handle ink</label><input type="range" data-k="inkOpacity" min="5" max="100"><span></span></div>
-      <div class="mark-row hidden"><p class="label"><b>Mark color</b> — for the handle</p><div class="swatches mark-swatches"></div></div>
-      <div class="logo-opts">
-      <hr>
-      <p class="label"><b>Logo</b></p>
-      <div class="slider-row"><label>Size</label><input type="range" data-k="size" min="20" max="200"><span></span></div>
-      <div class="slider-row"><label>Vertical</label><input type="range" data-k="vert" min="-60" max="60"><span></span></div>
-      <div class="slider-row"><label>Horizontal</label><input type="range" data-k="horiz" min="-60" max="60"><span></span></div>
-      <div class="slider-row"><label>Rotate</label><input type="range" data-k="rot" min="-45" max="45" step="0.25"><span></span></div>
-      </div>
-      <div class="text-opts">
-        <hr>
-        <p class="label"><b>Recipient text</b></p>
-        <div class="slider-row"><label>Size</label><input type="range" data-k="tsize" min="20" max="200"><span></span></div>
-        <div class="slider-row"><label>Vertical</label><input type="range" data-k="tvert" min="-60" max="60"><span></span></div>
-        <div class="slider-row"><label>Horizontal</label><input type="range" data-k="thoriz" min="-60" max="60"><span></span></div>
-        <div class="slider-row"><label>Rotate</label><input type="range" data-k="trot" min="-45" max="45" step="0.25"><span></span></div>
-      </div>
-      <div class="back-opts hidden">
-        <hr>
-        <p class="label"><b>Back side</b></p>
-        <label class="check"><input type="checkbox" data-k="blogo"> Small logo where the stamp is</label>
-        <div class="slider-row"><label>Logo size</label><input type="range" data-k="bsize" min="20" max="300"><span></span></div>
-        <div class="slider-row"><label>Vertical</label><input type="range" data-k="bvert" min="-60" max="60"><span></span></div>
-        <div class="slider-row"><label>Horizontal</label><input type="range" data-k="bhoriz" min="-100" max="60"><span></span></div>
-        <div class="slider-row"><label>Rotate</label><input type="range" data-k="brot" min="-45" max="45" step="0.25"><span></span></div>
-        <p class="label" style="margin-top:10px"><b>Back message</b> — type it in the "Back side message" box above the knives</p>
-        <div class="slider-row"><label>Size</label><input type="range" data-k="btsize" min="20" max="200"><span></span></div>
-        <div class="slider-row"><label>Vertical</label><input type="range" data-k="btvert" min="-60" max="60"><span></span></div>
-        <div class="slider-row"><label>Horizontal</label><input type="range" data-k="bthoriz" min="-60" max="60"><span></span></div>
-        <div class="slider-row"><label>Rotate</label><input type="range" data-k="btrot" min="-45" max="45" step="0.25"><span></span></div>
-        <p class="label" style="margin-top:10px"><b>Back tagline</b></p>
-        <div class="slider-row tag-text"><label>Text</label><input type="text" data-k="btagline" maxlength="50" placeholder="Optional line by the message"></div>
-        <div class="seg-group pos-row"><span class="seg-label">Position</span><div class="seg btagpos"><button data-val="above">Above</button><button data-val="below">Below</button><button data-val="left">Left</button><button data-val="right">Right</button></div></div>
-        <div class="slider-row"><label>Size</label><input type="range" data-k="btagsize" min="30" max="200"><span></span></div>
-        <div class="slider-row"><label>Curve</label><input type="range" data-k="btagcurve" min="0" max="100"><span></span></div>
-        <div class="slider-row"><label>Vertical</label><input type="range" data-k="btagvert" min="-40" max="40"><span></span></div>
-      </div>
-      <button class="btn link reset-one">↺ Reset this product</button>
-    </div>
-  </div>
-</template>
 
 <script src="app.js"></script>
 </body>
