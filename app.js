@@ -281,6 +281,24 @@ async function findLogos(site) {
 }
 
 
+// The logo as it should be used: inverted (a negative) when that logo's Invert switch is on.
+// Turns dark-background / white-lettering logos into something engravable.
+const logoImgCache = new Map();
+async function logoImage(logo) {
+  const key = logo.id + (logo.invert ? '#inv' : '');
+  if (logoImgCache.has(key)) return logoImgCache.get(key);
+  const im = await loadImage(logo.dataURL);
+  if (!logo.invert) { logoImgCache.set(key, im); return im; }
+  const c = document.createElement('canvas'); c.width = im.naturalWidth; c.height = im.naturalHeight;
+  const g = c.getContext('2d', { willReadFrequently: true });
+  g.drawImage(im, 0, 0);
+  const id = g.getImageData(0, 0, c.width, c.height), d = id.data;
+  for (let i = 0; i < d.length; i += 4) { d[i] = 255 - d[i]; d[i + 1] = 255 - d[i + 1]; d[i + 2] = 255 - d[i + 2]; }
+  g.putImageData(id, 0, 0);
+  logoImgCache.set(key, c);
+  return c;
+}
+
 // ─── Logo processing ────────────────────────────────────────────────────────
 // Turns the active logo into an engraving mask: alpha = how strongly each pixel
 // is marked, rgb = its palette colour. Also returns the colour palette and bbox.
@@ -301,7 +319,7 @@ async function getProcessed() {
   if (processing) return processing;
   const gen = processGen;
   processing = (async () => {
-    const im = await loadImage(logo.dataURL);
+    const im = await logoImage(logo);
     if (gen !== processGen) return getProcessed();
     const out = processLogo(im, state.cleanup);
     if (gen === processGen) { processed = out; processing = null; }
@@ -311,9 +329,9 @@ async function getProcessed() {
 }
 
 function processLogo(im, cl) {
-  const maxSide = 900;
-  const s = Math.min(1, maxSide / Math.max(im.naturalWidth, im.naturalHeight));
-  const w = Math.max(1, Math.round(im.naturalWidth * s)), h = Math.max(1, Math.round(im.naturalHeight * s));
+  const maxSide = 900, iw = im.naturalWidth || im.width, ih = im.naturalHeight || im.height;
+  const s = Math.min(1, maxSide / Math.max(iw, ih));
+  const w = Math.max(1, Math.round(iw * s)), h = Math.max(1, Math.round(ih * s));
   const c = document.createElement('canvas'); c.width = w; c.height = h;
   const x = c.getContext('2d', { willReadFrequently: true });
   x.drawImage(im, 0, 0, w, h);
@@ -805,6 +823,88 @@ async function share(items) {
 }
 const allDesigns = () => PRODUCTS.flatMap(p => state.per[p.id].designs.map(d => [p, d]));
 
+// ─── Print-all PDF ──────────────────────────────────────────────────────────
+// One letter-size PDF with every design, three to a page, each labelled. Written by hand
+// (JPEG pages + built-in Helvetica), so no library is needed and it works offline.
+function pdfEscape(t) { return String(t).replace(/\s·\s/g, ' - ').replace(/—/g, '-').replace(/[\\()]/g, m => '\\' + m).replace(/[^\x20-\x7e]/g, ''); }
+async function buildPdf(items, scale = 1) {
+  const PW = 612, PH = 792, M = 36, GAP = 14, LABEL = 16;
+  const logo = state.logos.find(l => l.id === state.activeLogoId);
+  const title = (logo ? logo.name.replace(/\.[a-z0-9]+$/i, '') : 'Mockups') + ' — engraving mockups';
+  const date = new Date().toLocaleDateString();
+  // render every design to JPEG
+  const imgs = [];
+  for (const [p, d] of items) {
+    const c = document.createElement('canvas');
+    const im = await loadImage(imageInfo(p).src);
+    await renderDesign(p, d, c, scale);
+    const jpg = c.toDataURL('image/jpeg', 0.86).split(',')[1];
+    const bytes = Uint8Array.from(atob(jpg), ch => ch.charCodeAt(0));
+    const n = state.per[p.id].designs.indexOf(d) + 1;
+    const label = `${p.name} · Design ${n}` + (p.surfaces ? ` · ${d.surface === 'blade' ? 'Blade' : 'Handle'} engraving` : ` · ${d.side === 'back' ? 'Back' : 'Front'}`);
+    imgs.push({ bytes, w: c.width, h: c.height, label });
+  }
+  // lay out pages
+  const pages = []; let cur = null, y = 0;
+  const usableW = PW - 2 * M;
+  for (const im of imgs) {
+    const dh = usableW * im.h / im.w;
+    if (!cur || y - dh - LABEL < M) { cur = { items: [] }; pages.push(cur); y = PH - M - 24; }
+    cur.items.push({ im, x: M, y: y - dh, w: usableW, h: dh });
+    y -= dh + LABEL + GAP;
+  }
+  // write objects
+  const enc = new TextEncoder();
+  const parts = [], offsets = [];
+  let pos = 0;
+  const push = (data) => { const b = typeof data === 'string' ? enc.encode(data) : data; parts.push(b); pos += b.length; };
+  const obj = (id, body) => { offsets[id] = pos; push(`${id} 0 obj\n`); if (typeof body === 'string') push(body); else body(); push('\nendobj\n'); };
+  push('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n');
+  // 1 catalog, 2 pages, 3 font, then per image: XObject; per page: content + page
+  let nextId = 4;
+  const imageIds = imgs.map(() => nextId++);
+  const pageIds = pages.map(() => nextId++);
+  const contentIds = pages.map(() => nextId++);
+  obj(1, '<< /Type /Catalog /Pages 2 0 R >>');
+  obj(2, `<< /Type /Pages /Kids [${pageIds.map(i => i + ' 0 R').join(' ')}] /Count ${pages.length} >>`);
+  obj(3, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
+  imgs.forEach((im, i) => obj(imageIds[i], () => {
+    push(`<< /Type /XObject /Subtype /Image /Width ${im.w} /Height ${im.h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${im.bytes.length} >>\nstream\n`);
+    push(im.bytes); push('\nendstream');
+  }));
+  pages.forEach((pg, pi) => {
+    let c = `BT /F1 11 Tf ${M} ${PH - M - 8} Td (${pdfEscape(title)}) Tj ET\n`;
+    c += `BT /F1 9 Tf ${PW - M - 150} ${PH - M - 8} Td (${pdfEscape(date + '   page ' + (pi + 1) + ' of ' + pages.length)}) Tj ET\n`;
+    pg.items.forEach(it => {
+      const idx = imgs.indexOf(it.im);
+      c += `q ${it.w.toFixed(2)} 0 0 ${it.h.toFixed(2)} ${it.x.toFixed(2)} ${it.y.toFixed(2)} cm /Im${idx} Do Q\n`;
+      c += `BT /F1 10 Tf ${it.x} ${(it.y - 12).toFixed(2)} Td (${pdfEscape(it.im.label)}) Tj ET\n`;
+    });
+    obj(contentIds[pi], () => { const b = enc.encode(c); push(`<< /Length ${b.length} >>\nstream\n`); push(b); push('\nendstream'); });
+    const xobjs = pg.items.map(it => `/Im${imgs.indexOf(it.im)} ${imageIds[imgs.indexOf(it.im)]} 0 R`).join(' ');
+    obj(pageIds[pi], `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${PW} ${PH}] /Resources << /Font << /F1 3 0 R >> /XObject << ${xobjs} >> >> /Contents ${contentIds[pi]} 0 R >>`);
+  });
+  const xref = pos;
+  push(`xref\n0 ${nextId}\n0000000000 65535 f \n`);
+  for (let i = 1; i < nextId; i++) push(String(offsets[i]).padStart(10, '0') + ' 00000 n \n');
+  push(`trailer\n<< /Size ${nextId} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+  return new Blob(parts, { type: 'application/pdf' });
+}
+async function printAll() {
+  const btn = $('#pdf-all'); btn.disabled = true; btn.textContent = 'Building PDF…';
+  try {
+    const blob = await buildPdf(allDesigns());
+    const name = fileName(PRODUCTS[0], state.per[PRODUCTS[0].id].designs[0]).replace(/-[a-z0-9]+-(front|back|blade|handle)-\d+\.png$/, '') + '-mockups.pdf';
+    const file = new File([blob], name, { type: 'application/pdf' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try { await navigator.share({ files: [file], title: 'Engraving mockups' }); } catch (e) { /* cancelled */ }
+    } else {
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
+      document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    }
+  } finally { btn.disabled = false; btn.textContent = '🖨 Print all (PDF)'; }
+}
+
 // ─── Picker UI ──────────────────────────────────────────────────────────────
 let combine = null; // { picks: [], balance: 100 }
 
@@ -822,8 +922,13 @@ function renderPicker() {
   const ordered = [...state.logos.filter(l => l.transient), ...state.logos.filter(l => !l.transient)];
   ordered.forEach(l => {
     const t = document.createElement('div');
-    t.className = 'logo-thumb' + (l.id === state.activeLogoId && !combine ? ' sel' : '');
+    t.className = 'logo-thumb' + (l.id === state.activeLogoId && !combine ? ' sel' : '') + (l.invert ? ' inverted' : '');
     t.innerHTML = `<img src="${l.dataURL}" alt=""><span class="dim">${l.w}×${l.h}</span>`;
+    if (!combine) {
+      const inv = document.createElement('button'); inv.className = 'inv' + (l.invert ? ' on' : ''); inv.textContent = '◐'; inv.title = 'Invert colors (negative)';
+      inv.onclick = (e) => { e.stopPropagation(); l.invert = !l.invert; if (l.id === state.activeLogoId) { state.cleanup.removed = []; invalidateLogo(); } save(); renderPicker(); renderCleanup(); rerenderAll(); };
+      t.appendChild(inv);
+    }
     const pickIdx = combine ? combine.picks.indexOf(l.id) : -1;
     if (pickIdx >= 0) { const b = document.createElement('span'); b.className = 'badge'; b.textContent = pickIdx + 1; t.appendChild(b); }
     else if (!combine) {
@@ -858,10 +963,12 @@ function combinePick(id) {
 async function combinedCanvas() {
   const [a, b] = combine.picks.map(id => state.logos.find(l => l.id === id));
   if (!a || !b) return null;
-  const [ia, ib] = await Promise.all([loadImage(a.dataURL), loadImage(b.dataURL)]);
+  const [ia, ib] = await Promise.all([logoImage(a), logoImage(b)]);
   const H = 600, bal = combine.balance / 100;
-  const ha = H * bal, wa = ia.naturalWidth / ia.naturalHeight * ha;
-  const hb = H, wb = ib.naturalWidth / ib.naturalHeight * hb;
+  const dim = im => [im.naturalWidth || im.width, im.naturalHeight || im.height];
+  const [aw, ah] = dim(ia), [bw, bh] = dim(ib);
+  const ha = H * bal, wa = aw / ah * ha;
+  const hb = H, wb = bw / bh * hb;
   const gap = H * 0.08, top = Math.max(ha, hb);
   const c = document.createElement('canvas'); c.width = Math.ceil(wa + gap + wb); c.height = Math.ceil(top);
   const g = c.getContext('2d');
@@ -1069,8 +1176,9 @@ function wireDesign(prod, d, card) {
     save(); buildProducts(); rerender(prod.id);
   };
   $('.rm', card).onclick = () => {
-    if (per.designs.length === 1) { if (!confirm('This is the only design for this knife. Reset it to the starting design?')) return; per.designs = starterDesigns(prod); }
-    else per.designs = per.designs.filter(x => x !== d);
+    const n = per.designs.indexOf(d) + 1;
+    if (per.designs.length === 1) { if (!confirm(`Delete Design ${n}? It's the only one on the ${prod.name}, so it will be replaced by a fresh starting design.`)) return; per.designs = starterDesigns(prod); }
+    else { if (!confirm(`Delete Design ${n} on the ${prod.name}?`)) return; per.designs = per.designs.filter(x => x !== d); }
     save(); buildProducts(); rerender(prod.id);
   };
   $('.canvas-wrap', card).onclick = () => present(prod, d);
@@ -1173,6 +1281,7 @@ function init() {
 
   // footer
   $('#share-all').onclick = () => share(allDesigns());
+  $('#pdf-all').onclick = printAll;
   $('#reset-designs').onclick = () => {
     if (!confirm('Put every knife back to its single starting design? Your logo stays.')) return;
     PRODUCTS.forEach(p => state.per[p.id] = defaultPer(p)); save(); buildProducts(); rerenderAll();
@@ -1195,6 +1304,6 @@ function init() {
   }
 }
 
-if (DEBUG) window.__mm = { state, PRODUCTS, addLogoFromDataURL, rerenderAll, save, exportCanvas, backImage, loadImage, newDesign };
+if (DEBUG) window.__mm = { state, PRODUCTS, addLogoFromDataURL, rerenderAll, save, exportCanvas, backImage, loadImage, newDesign, buildPdf, allDesigns };
 document.addEventListener('DOMContentLoaded', init);
 })();
