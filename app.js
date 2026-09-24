@@ -706,6 +706,7 @@ function drawTextLayout(lc, z, W, H, lines, d) {
   const pos = d.pos;
   if (pos === 'left' || pos === 'right') {
     const box = pos === 'left' ? { x: z.x, y: z.y, w: z.w * 0.48, h: z.h } : { x: z.x + z.w * 0.52, y: z.y, w: z.w * 0.48, h: z.h };
+    box.x += (d.thoriz / 100) * z.w;           // text Horizontal moves the text on its own
     placeText(lc, { ...box, angle: z.angle }, { tsize: d.tsize, tvert: d.tvert, thoriz: 0, trot: d.trot }, INK, lines);
     return pos === 'left' ? { ...z, x: z.x + z.w * 0.52, w: z.w * 0.48 } : { ...z, w: z.w * 0.48 };
   }
@@ -759,10 +760,12 @@ async function renderDesign(prod, d, canvas, scale) {
     placeLogo(lc, P, { x: st.x * W, y: st.y * H, w: st.w * W, h: st.h * H, angle: z.angle }, d, INK, z);
     if (lines.length) placeText(lc, z, d, INK, lines);
   } else if (P && P.bbox) {
-    // logo with text arranged around it; Horizontal / Vertical move them together
-    const gz = { ...z, x: z.x + (d.horiz / 100) * z.w, y: z.y - (d.vert / 100) * z.h };
+    // logo with text arranged around it. Above/Below: Horizontal moves logo + text together.
+    // Left/Right: the logo slider moves only the logo and the text slider only the text.
+    const grouped = !(lines.length && (d.pos === 'left' || d.pos === 'right'));
+    const gz = { ...z, x: z.x + (grouped ? (d.horiz / 100) * z.w : 0), y: z.y - (d.vert / 100) * z.h };
     const logoZone = drawTextLayout(lc, gz, W, H, lines, d);
-    placeLogo(lc, P, logoZone, { ...d, horiz: 0, vert: 0 }, INK);
+    placeLogo(lc, P, logoZone, { ...d, horiz: grouped ? 0 : d.horiz, vert: 0 }, INK, z);
   } else if (lines.length) {
     placeText(lc, z, d, INK, lines);          // text only, centred
   }
@@ -865,7 +868,7 @@ const allDesigns = () => PRODUCTS.flatMap(p => state.per[p.id].designs.map(d => 
 // (JPEG pages + built-in Helvetica), so no library is needed and it works offline.
 function pdfEscape(t) { return String(t).replace(/\s·\s/g, ' - ').replace(/—/g, '-').replace(/[\\()]/g, m => '\\' + m).replace(/[^\x20-\x7e]/g, ''); }
 async function buildPdf(items, scale = 1) {
-  const PW = 612, PH = 792, M = 36, GAP = 14, LABEL = 16;
+  const PW = 612, PH = 792, M = 36, GAP = 18;
   const logo = state.logos.find(l => l.id === state.activeLogoId);
   const title = (logo ? logo.name.replace(/\.[a-z0-9]+$/i, '') : 'Mockups') + ' — engraving mockups';
   const date = new Date().toLocaleDateString();
@@ -881,15 +884,17 @@ async function buildPdf(items, scale = 1) {
     const label = `${p.name} · Design ${n}` + (p.surfaces ? ` · ${d.surface === 'blade' ? 'Blade' : 'Handle'} engraving` : ` · ${d.side === 'back' ? 'Back' : 'Front'}`);
     imgs.push({ bytes, w: c.width, h: c.height, label });
   }
-  // lay out pages
-  const pages = []; let cur = null, y = 0;
-  const usableW = PW - 2 * M;
-  for (const im of imgs) {
-    const dh = usableW * im.h / im.w;
-    if (!cur || y - dh - LABEL < M) { cur = { items: [] }; pages.push(cur); y = PH - M - 24; }
-    cur.items.push({ im, x: M, y: y - dh, w: usableW, h: dh });
-    y -= dh + LABEL + GAP;
-  }
+  // lay out pages: three knives per page (fewer only on the last), each centred in its row, nothing else
+  const PER = 3, rowH = (PH - 2 * M) / PER, usableW = PW - 2 * M;
+  const pages = [];
+  imgs.forEach((im, i) => {
+    if (i % PER === 0) pages.push({ items: [] });
+    const r = i % PER;
+    const s = Math.min(usableW / im.w, (rowH - GAP) / im.h);
+    const w = im.w * s, h = im.h * s;
+    const x = M + (usableW - w) / 2, y = PH - M - (r + 1) * rowH + (rowH - h) / 2;
+    pages[pages.length - 1].items.push({ im, x, y, w, h });
+  });
   // write objects
   const enc = new TextEncoder();
   const parts = [], offsets = [];
@@ -910,12 +915,10 @@ async function buildPdf(items, scale = 1) {
     push(im.bytes); push('\nendstream');
   }));
   pages.forEach((pg, pi) => {
-    let c = `BT /F1 11 Tf ${M} ${PH - M - 8} Td (${pdfEscape(title)}) Tj ET\n`;
-    c += `BT /F1 9 Tf ${PW - M - 150} ${PH - M - 8} Td (${pdfEscape(date + '   page ' + (pi + 1) + ' of ' + pages.length)}) Tj ET\n`;
+    let c = '';
     pg.items.forEach(it => {
       const idx = imgs.indexOf(it.im);
       c += `q ${it.w.toFixed(2)} 0 0 ${it.h.toFixed(2)} ${it.x.toFixed(2)} ${it.y.toFixed(2)} cm /Im${idx} Do Q\n`;
-      c += `BT /F1 10 Tf ${it.x} ${(it.y - 12).toFixed(2)} Td (${pdfEscape(it.im.label)}) Tj ET\n`;
     });
     obj(contentIds[pi], () => { const b = enc.encode(c); push(`<< /Length ${b.length} >>\nstream\n`); push(b); push('\nendstream'); });
     const xobjs = pg.items.map(it => `/Im${imgs.indexOf(it.im)} ${imageIds[imgs.indexOf(it.im)]} 0 R`).join(' ');
@@ -1101,7 +1104,7 @@ function designHtml(prod, d, n) {
         ${sliderHtml('Size', 'tsize', 20, 200)}
         ${pocket ? '' : sliderHtml('Curve', 'curve', 0, 100)}
         ${sliderHtml('Vertical', 'tvert', -60, 60)}
-        ${sliderHtml('Horizontal', 'thoriz', -60, 60)}
+        ${sliderHtml('Horizontal', 'thoriz', -100, 100)}
         ${sliderHtml('Rotate', 'trot', -45, 45, 0.25)}
         <button class="btn link copy-text">⧉ Copy this text to all knives</button>
         <hr>
@@ -1111,7 +1114,7 @@ function designHtml(prod, d, n) {
         ${pocket ? '' : `<div class="seg-group pos-row spot-row"><span class="seg-label">Placement</span>${segHtml('spot', [['stamp', 'Stamp spot (small)'], ['center', 'Centered']])}</div>`}
         ${sliderHtml('Size', 'size', 20, 300)}
         ${sliderHtml('Vertical', 'vert', -60, 60)}
-        ${sliderHtml('Horizontal', 'horiz', -100, 60)}
+        ${sliderHtml('Horizontal', 'horiz', -100, 100)}
         ${sliderHtml('Rotate', 'rot', -45, 45, 0.25)}
         <hr>
       </div>
@@ -1162,6 +1165,7 @@ function wireDesign(prod, d, card) {
     const spot = $('.spot-row', opts); if (spot) show(spot, d.side === 'back' && d.logo);
     const posRow = $('.pos-row:not(.spot-row)', opts); if (posRow) show(posRow, d.logo && !(d.side === 'back' && d.logoSpot === 'stamp'));
     const curve = $('[data-row=curve]', opts); if (curve) show(curve, d.logo && !(d.side === 'back' && d.logoSpot === 'stamp') && /above|below/.test(d.pos));
+    const th = $('[data-row=thoriz]', opts); if (th) show(th, !(d.logo && !(d.side === 'back' && d.logoSpot === 'stamp') && /above|below/.test(d.pos) && !prod.surfaces));
     const note = $('.text-note', opts);
     const oneEach = d.logo && !(d.side === 'back' && d.logoSpot === 'stamp') && /above|below/.test(d.pos) && !prod.surfaces;
     note.textContent = oneEach ? '— line 1 goes ' + d.pos + ' the logo, line 2 on the other side (Cutco allows one line each)' : '';

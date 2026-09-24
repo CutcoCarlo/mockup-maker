@@ -1,7 +1,7 @@
 /* Offline cache so the app works at a booth with no signal.
    App files (html/js/css) are network-first so updates show up on the next load;
    knife photos are cache-first since they never change. Bump VERSION on release. */
-const VERSION = 'mm-v21';
+const VERSION = 'mm-v22';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 const IMAGES = ['images/landscape/pocket-knife.jpg'].concat(['spatula-spreader', 'santoku', 'veggie-6in', 'santoku-trimmer']
