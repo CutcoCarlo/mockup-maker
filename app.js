@@ -56,7 +56,7 @@ const fontCss = (id, px) => (FONTS.find(f => f.id === id) || FONTS[0]).css.repla
 
 const INK = '#4c4c4c';          // engraving color before opacity/multiply
 const PREVIEW_W = 1200;         // on-screen render width; export uses native size
-const DEFAULT_CLEANUP = { level: 200, light: false, separate: false, separation: 40, removed: [] };
+const DEFAULT_CLEANUP = { level: 200, light: false, separate: false, separation: 40 };
 
 // ─── Designs ────────────────────────────────────────────────────────────────
 // Every knife holds a list of designs. A design is one picture: which side of the knife,
@@ -113,7 +113,7 @@ function load() {
     state.handle = s.handle || 'classic';
     state.pinkBg = !!s.pinkBg; state.pickerCollapsed = !!s.pickerCollapsed;
     state.activeLogoId = s.activeLogoId || null;
-    state.cleanup = { ...DEFAULT_CLEANUP, ...(s.cleanup || {}) };
+    state.cleanup = { ...DEFAULT_CLEANUP, ...(s.cleanup || {}) }; delete state.cleanup.removed;
     state.logos = (s.logos || []).filter(l => l && l.dataURL);
     if (!state.logos.find(l => l.id === state.activeLogoId)) state.activeLogoId = state.logos.length ? state.logos[state.logos.length - 1].id : null;
     PRODUCTS.forEach(p => {
@@ -216,16 +216,17 @@ async function addLogoFromDataURL(dataURL, name, opts = {}) {
     w = c.width; h = c.height;
     imgCache.delete(dataURL);
   }
-  const logo = { id: 'L' + (logoSeq++), name, dataURL: url, w, h, transient: !!opts.transient };
+  const logo = { id: 'L' + (logoSeq++), name, dataURL: url, w, h, transient: !!opts.transient, removed: [] };
+  if (opts.parts) { logo.parts = opts.parts; logo.balance = opts.balance; }
   state.logos.push(logo);
   if (!opts.quiet) {
     state.activeLogoId = logo.id;
-    state.cleanup.removed = [];
     invalidateLogo();
     rerenderAll();
   }
   save();
   renderPicker();
+  if (!opts.quiet) renderCleanup();
   return logo;
 }
 
@@ -319,13 +320,49 @@ async function getProcessed() {
   if (processing) return processing;
   const gen = processGen;
   processing = (async () => {
-    const im = await logoImage(logo);
-    if (gen !== processGen) return getProcessed();
-    const out = processLogo(im, state.cleanup);
+    let out;
+    if (logo.parts) {
+      // each part gets its own palette and its own removed colours
+      const parts = [];
+      for (let i = 0; i < logo.parts.length; i++) {
+        const part = logo.parts[i];
+        const im = await logoImage({ id: logo.id + '-' + i, dataURL: part.dataURL, invert: part.invert });
+        parts.push(processLogo(im, { ...state.cleanup, removed: part.removed || [] }));
+      }
+      if (gen !== processGen) return getProcessed();
+      out = composeParts(parts, logo.balance || 100);
+    } else {
+      const im = await logoImage(logo);
+      if (gen !== processGen) return getProcessed();
+      out = processLogo(im, { ...state.cleanup, removed: logo.removed || [] });
+    }
     if (gen === processGen) { processed = out; processing = null; }
     return out;
   })();
   return processing;
+}
+
+// Lay two processed parts side by side (same arrangement as the combined thumbnail).
+function composeParts(parts, balance) {
+  const H = 600, bal = balance / 100, gap = H * 0.08;
+  const sizes = parts.map((P, i) => { const h = i === 0 ? H * bal : H; return { w: P.w / P.h * h, h }; });
+  const top = Math.max(...sizes.map(z => z.h));
+  const W = sizes.reduce((a, z) => a + z.w, 0) + gap * (parts.length - 1);
+  const c = document.createElement('canvas'); c.width = Math.ceil(W); c.height = Math.ceil(top);
+  const g = c.getContext('2d');
+  let x = 0;
+  const palette = [];
+  parts.forEach((P, i) => {
+    g.drawImage(P.canvas, x, (top - sizes[i].h) / 2, sizes[i].w, sizes[i].h);
+    P.palette.forEach(p => palette.push({ ...p, part: i }));
+    x += sizes[i].w + gap;
+  });
+  // bbox of what's actually marked
+  const d = g.getImageData(0, 0, c.width, c.height).data;
+  let minX = c.width, minY = c.height, maxX = -1, maxY = -1;
+  for (let y = 0; y < c.height; y++) for (let xx = 0; xx < c.width; xx++) if (d[(y * c.width + xx) * 4 + 3] > 12) { if (xx < minX) minX = xx; if (xx > maxX) maxX = xx; if (y < minY) minY = y; if (y > maxY) maxY = y; }
+  const bbox = maxX < 0 ? null : { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 };
+  return { canvas: c, w: c.width, h: c.height, palette, bbox, parts: parts.length };
 }
 
 function processLogo(im, cl) {
@@ -924,9 +961,9 @@ function renderPicker() {
     const t = document.createElement('div');
     t.className = 'logo-thumb' + (l.id === state.activeLogoId && !combine ? ' sel' : '') + (l.invert ? ' inverted' : '');
     t.innerHTML = `<img src="${l.dataURL}" alt=""><span class="dim">${l.w}×${l.h}</span>`;
-    if (!combine) {
+    if (!combine && !l.parts) {
       const inv = document.createElement('button'); inv.className = 'inv' + (l.invert ? ' on' : ''); inv.textContent = '◐'; inv.title = 'Invert colors (negative)';
-      inv.onclick = (e) => { e.stopPropagation(); l.invert = !l.invert; if (l.id === state.activeLogoId) { state.cleanup.removed = []; invalidateLogo(); } save(); renderPicker(); renderCleanup(); rerenderAll(); };
+      inv.onclick = (e) => { e.stopPropagation(); l.invert = !l.invert; l.removed = []; if (l.id === state.activeLogoId) invalidateLogo(); save(); renderPicker(); renderCleanup(); rerenderAll(); };
       t.appendChild(inv);
     }
     const pickIdx = combine ? combine.picks.indexOf(l.id) : -1;
@@ -943,7 +980,7 @@ function renderPicker() {
 }
 function selectLogo(id) {
   if (state.activeLogoId === id) return;
-  state.activeLogoId = id; state.cleanup.removed = [];
+  state.activeLogoId = id;
   save(); invalidateLogo(); renderPicker(); renderCleanup(); rerenderAll();
 }
 function removeLogo(id) {
@@ -989,9 +1026,12 @@ async function updateCombine() {
 }
 async function useCombined() {
   const c = await combinedCanvas(); if (!c) return;
-  const names = combine.picks.map(id => state.logos.find(l => l.id === id).name.replace(/\.[a-z0-9]+$/i, ''));
+  const picked = combine.picks.map(id => state.logos.find(l => l.id === id));
+  const names = picked.map(l => l.name.replace(/\.[a-z0-9]+$/i, ''));
+  const parts = picked.map(l => ({ dataURL: l.dataURL, invert: !!l.invert, removed: [] }));
+  const balance = combine.balance;
   combine = null; show($('#combine-panel'), false);
-  await addLogoFromDataURL(c.toDataURL('image/png'), names.join('+') + '.png');
+  await addLogoFromDataURL(c.toDataURL('image/png'), names.join('+') + '.png', { parts, balance });
 }
 
 // ─── Cleanup UI ─────────────────────────────────────────────────────────────
@@ -1004,15 +1044,22 @@ async function renderCleanup() {
   const P = await getProcessed();
   const sw = $('#swatches'); sw.innerHTML = '';
   if (!P) { sw.innerHTML = '<span class="muted small">Upload a logo to see its colors.</span>'; return; }
-  P.palette.forEach(p => {
-    const s = document.createElement('div');
-    s.className = 'swatch' + (p.removed ? ' off' : ''); s.style.background = p.hex; s.title = p.hex;
-    s.onclick = () => {
-      const i = cl.removed.findIndex(hx => { const [r, g, b] = hexToRgb(hx); return Math.hypot(r - p.r, g - p.g, b - p.b) < 40; });
-      if (i >= 0) cl.removed.splice(i, 1); else cl.removed.push(p.hex);
-      cleanupChanged();
-    };
-    sw.appendChild(s);
+  const logo = state.logos.find(l => l.id === state.activeLogoId);
+  const groups = P.parts ? logo.parts.map((part, i) => ({ label: 'Logo ' + (i + 1), list: part, colors: P.palette.filter(p => p.part === i) })) : [{ label: '', list: logo, colors: P.palette }];
+  groups.forEach(gr => {
+    if (gr.label) { const h = document.createElement('span'); h.className = 'swatch-label'; h.textContent = gr.label; sw.appendChild(h); }
+    gr.colors.forEach(p => {
+      const s = document.createElement('div');
+      s.className = 'swatch' + (p.removed ? ' off' : ''); s.style.background = p.hex; s.title = p.hex;
+      s.onclick = () => {
+        gr.list.removed = gr.list.removed || [];
+        const i = gr.list.removed.findIndex(hx => { const [r, g, b] = hexToRgb(hx); return Math.hypot(r - p.r, g - p.g, b - p.b) < 40; });
+        if (i >= 0) gr.list.removed.splice(i, 1); else gr.list.removed.push(p.hex);
+        cleanupChanged();
+      };
+      sw.appendChild(s);
+    });
+    if (gr.label) { const br = document.createElement('div'); br.className = 'swatch-break'; sw.appendChild(br); }
   });
 }
 let cleanupTimer = 0;
@@ -1277,7 +1324,7 @@ function init() {
   $('#cl-light').onchange = e => { state.cleanup.light = e.target.checked; cleanupChanged(); };
   $('#cl-separate').onchange = e => { state.cleanup.separate = e.target.checked; show($('#cl-sep-row'), e.target.checked); cleanupChanged(); };
   $('#cl-sep').oninput = e => { state.cleanup.separation = +e.target.value; $('#cl-sep-val').textContent = e.target.value; cleanupChanged(); };
-  $('#cl-reset').onclick = () => { state.cleanup = { ...DEFAULT_CLEANUP, removed: [] }; cleanupChanged(); };
+  $('#cl-reset').onclick = () => { state.cleanup = { ...DEFAULT_CLEANUP }; const l = state.logos.find(x => x.id === state.activeLogoId); if (l) { l.removed = []; (l.parts || []).forEach(p => p.removed = []); } cleanupChanged(); };
 
   // footer
   $('#share-all').onclick = () => share(allDesigns());
@@ -1304,6 +1351,6 @@ function init() {
   }
 }
 
-if (DEBUG) window.__mm = { state, PRODUCTS, addLogoFromDataURL, rerenderAll, save, exportCanvas, backImage, loadImage, newDesign, buildPdf, allDesigns };
+if (DEBUG) window.__mm = { state, PRODUCTS, addLogoFromDataURL, rerenderAll, save, exportCanvas, backImage, loadImage, newDesign, buildPdf, allDesigns, getProcessed, invalidateLogo };
 document.addEventListener('DOMContentLoaded', init);
 })();
